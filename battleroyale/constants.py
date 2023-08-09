@@ -31,13 +31,13 @@ SWORDS: Final[str] = "https://cdn.discordapp.com/emojis/1123588896136106074.webp
 
 
 PROMPTS: List[str] = [
-    "{killed} was killed by {killer}.",
-    "{killer} killed {killed} with an axe 🪓!",
-    "{killer} slaughtered {killed} with their looks 😎.",
+    "{killed} was killed by {killer} with poison from Boom's hand.",
+    "{killer} killed {killed} with a Pilum!",
+    "{killer} slaughtered {killed} with their Roman Poison.",
     "{killer} murdered {killed}.",
-    "{killer} beat {killed} to death with a rainbow trout 🐟.",
-    "{killer} sucked the life out of {killed}.",
-    "{killer} ran over {killed} with a taco 🌮 truck.",
+    "{killer} beat {killed} to death with a Marble Brick.",
+    "{killer} stabbed {killed} with a Gladius.",
+    "{killer} ran over {killed} with a Carthinigan Elephant.",
     "{killer} drove {killed} to the point of insanity 🤯.",
     "{killer} ran {killed} over with a truck 🚚.",
     "{killer} lit {killed}'s hair on fire 🔥!",
