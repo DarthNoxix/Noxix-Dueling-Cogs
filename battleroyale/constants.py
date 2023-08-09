@@ -74,7 +74,7 @@ PROMPTS: List[str] = [
     "{killer} obliterated {killed} with a powerful spell ✨!",
     "{killer} outsmarted {killed} and took them down. 🎯",
     "{killer} unleashed their fury upon {killed} and ended their life. 😡",
-    "{killer} struck down {killed} with lightning speed ⚡!",
+    "{killer} prayed to My husband, and Jupiter struck down {killed} with lightning⚡!",
     "{killed} met their demise at the hands of {killer}.",
     "{killer} terminated {killed} with extreme prejudice.",
     "{killer} dispatched {killed} without mercy.",
@@ -111,9 +111,9 @@ PROMPTS: List[str] = [
 
 
 WINNER_PROMPTS: List[str] = [
-    "{winner} is the winner 🏆!",
-    "Winner winner, chicken 🐔 dinner! Congrats {winner}!",
-    "Heyyyyoooo, {winner} won 🏆!",
+    "{winner} is the winner 🏆! The Gods of Rome have Blessed you on this day!",
+    "Winner! Congrats {winner}! The Emperor is pleased.",
+    "Stand at attention! {winner} won 🏆!",
     "In the end... {winner} was all that remained.",
     "{winner} is your final survivor.",
     "We have a winner and it's.. {winner}, You'll Walk... With A Limp!",
@@ -122,13 +122,13 @@ WINNER_PROMPTS: List[str] = [
     "Winning and losing does not have any meaning, because some people win by losing and some lose by winning. {winner} Congratulations of winning!",
     "{winner} You never lose, you either win or you learn.",
     "Winning is not everything, but the effort to win is. {winner} You did it!",
-    "You freaking did it {winner}! You won!",
+    "You fucking did it {winner}! You won!",
     "You are the winner {winner}! You are the best!",
-    "Ayoo {winne}, Victory has a hundred fathers, but defeat is an orphan.",
+    "{winner}, Victory has a hundred fathers, but defeat is an orphan. Ask Boom, he can tell you a few things about that.",
     "Yesterday I dared to struggle. Today I dare to win and you did it {winner}!",
     "Why do I win every time? {winner} Because I'm the best, and everyone else sucks.",
     "You are a winner {winner}! You are just a winner i swear, congrats!🏆",
     "For every winner, there are dozens of losers. Odds are you're one of them {winner}!",
     "You shouldn't focus on why you can't win, and you should focus on the winner, {winner}!",
-    "Why are you so good {winner}? I'm just a winner, I guess.",
+    "Why are you so good {winner}? Boom wishes he was as good as you are.",
 ]
