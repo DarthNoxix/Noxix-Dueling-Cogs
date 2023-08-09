@@ -60,7 +60,7 @@ def game_tool(ctx: commands.Context) -> ModuleType:
 
 
 class BattleRoyale(commands.Cog):
-    """Play Battle Royale with your friends!"""
+    """Play Roman Colosseum Games with your friends!"""
 
     __version__: Final[str] = "0.1.2"
     __author__: Final[str] = humanize_list(["inthedark.org", "MAX", "AAA3A", "sravan"])
@@ -274,13 +274,13 @@ class BattleRoyale(commands.Cog):
     @setbattleroyale.command(name="emoji")
     async def _emoji(self, ctx: commands.Context, emoji: EmojiConverter):
         """
-        Set an emoji to be used with Battle Royale.
+        Set an emoji to be used with Roman Colosseum Games.
         """
         if not emoji:
             await self.config.battle_emoji.set("⚔️")
-            return await ctx.send("I have reset the battle royale emoji!")
+            return await ctx.send("I have reset the Roman Colosseum emoji!")
         await self.config.battle_emoji.set(emoji.as_emoji())
-        await ctx.send(f"Set the battle royale emoji to {emoji.as_emoji()}")
+        await ctx.send(f"Set the Roman Colosseum Games emoji to {emoji.as_emoji()}")
 
     @commands.is_owner()
     @setbattleroyale.command(name="wait")
@@ -312,7 +312,7 @@ class BattleRoyale(commands.Cog):
         emoji = global_data["battle_emoji"]
         cooldown = global_data["cooldown"]
         embed = discord.Embed(
-            title="Battle Royale Settings",
+            title="Roman Colosseum Games Settings",
             color=await ctx.embed_color(),
             description=(
                 f"**Prize:** {prize}"
@@ -331,7 +331,7 @@ class BattleRoyale(commands.Cog):
         self, ctx: commands.Context, delay: commands.Range[int, 10, 20] = 10, skip: bool = False
     ):
         """
-        Battle Royale with other members!
+        Participate in the Roman Colosseum with other Romans!
 
         **Parameters:**
         - `delay`: min 10, max 20.
@@ -341,13 +341,13 @@ class BattleRoyale(commands.Cog):
         emoji = await self.config.battle_emoji()
 
         embed: discord.Embed = discord.Embed(
-            title="Battle Royale",
+            title="Roman Colosseum Games",
             color=await ctx.embed_color(),
         )
         join_view: JoinGameView = JoinGameView(emoji, timeout=WAIT_TIME)
         now = datetime.datetime.now(tz=datetime.timezone.utc)
         endtime = now + datetime.timedelta(seconds=WAIT_TIME)
-        embed.description = f"- Starting <t:{int(endtime.timestamp())}:R>.\n- Click the `Join Game` button to join the game."
+        embed.description = f"- Starting <t:{int(endtime.timestamp())}:R>.\n- Click the `Join Game` button to join the Roman Colosseum Games that are about to take place."
         embed.set_thumbnail(url=SWORDS)
         join_view._message = await ctx.send(embed=embed, view=join_view)
         await asyncio.sleep(WAIT_TIME)
@@ -379,7 +379,7 @@ class BattleRoyale(commands.Cog):
         skip: bool = False,
     ):
         """
-        Battle Royale with random players from your server.
+        Participate in Roman Colosseum Games with random players from your server.
 
         **Parameters**
         - `players`: how many players you want to join.
@@ -392,9 +392,9 @@ class BattleRoyale(commands.Cog):
             player.append(ctx.author)
         game = Game(cog=self, delay=delay, skip=skip)
         embed: discord.Embed = discord.Embed(
-            title="Battle Royale",
+            title="Roman Colosseum Games",
             color=await ctx.embed_color(),
-            description="Automated Battle Royale session starting...",
+            description="Automated Roman Colosseum Games session starting...",
         )
         embed.set_thumbnail(url=SWORDS)
         message = await ctx.send(embed=embed)
@@ -407,7 +407,7 @@ class BattleRoyale(commands.Cog):
     @battleroyale.command(name="profile", aliases=["stats"])
     async def profile(self, ctx: commands.Context, *, user: Optional[discord.Member] = None):
         """
-        Show your battle royale profile.
+        Show your Roman Colosseum Games profile.
         """
         user = user or ctx.author
         data = await self.config.user(user).all()
