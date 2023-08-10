@@ -460,7 +460,7 @@ class BattleRoyale(commands.Cog):
         description = box(table.get_string(), lang="sml")
         pages: List[discord.Embed] = []
         for page in pagify(description, page_length=4000):
-            embed = discord.Embed(title="BattleRoyale Leaderboard", color=await ctx.embed_color())
+            embed = discord.Embed(title="Gladiator Games Leaderboard", color=await ctx.embed_color())
             embed.description = page
             pages.append(embed)
         await SimpleMenu(
