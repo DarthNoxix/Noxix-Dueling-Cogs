@@ -71,7 +71,7 @@ PROMPTS: List[str] = [
     "{killer} killed {killed} with a War Hammer 🪓!",
     "{killer} killed {killed} with a pickaxe ⛏️!",
     "{killed} met their demise at the hands of {killer}. 💀",
-    "{killer} obliterated {killed} with a powerful spell ✨!",
+    "{killer} obliterated {killed} with a powerful curse given to them by Jupiter ✨!",
     "{killer} outsmarted {killed} and took them down. 🎯",
     "{killer} unleashed their fury upon {killed} and ended their life. 😡",
     "{killer} prayed to My husband, and Jupiter struck down {killed} with lightning⚡!",
