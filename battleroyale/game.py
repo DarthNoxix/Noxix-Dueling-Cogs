@@ -84,7 +84,7 @@ class Game:
                 else remaining_players_str
             )
             embed.description = (
-                f"**{len(self.remaining_players)} Remaining Players:**\n{remaining_players_str}."
+                f"**{len(self.remaining_players)} Remaining Gladiators:**\n{remaining_players_str}."
             )
             self.messages.append(original_message)
             self.original_message: discord.Message = await self.ctx.send(embed=embed)
@@ -130,11 +130,11 @@ class Game:
                             else remaining_players_str
                         )
                         embed: discord.Embed = discord.Embed(
-                            title="Battle Royale", color=await self.ctx.embed_color()
+                            title="Gladiator Games", color=await self.ctx.embed_color()
                         )
                         embed.description = (
                             f"{prompts}"
-                            f"\n\n**{len(self.remaining_players)} Remaining Players:**\n{remaining_players_str}."
+                            f"\n\n**{len(self.remaining_players)} Remaining Gladiators:**\n{remaining_players_str}."
                         )[:2000]
                         embed.set_image(url="attachment://image.png")
                         if EDIT_ORIGINAL_MESSAGE:
