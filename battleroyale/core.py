@@ -265,7 +265,7 @@ class BattleRoyale(commands.Cog):
     @bank.is_owner_if_bank_global()
     @setbattleroyale.command(name="prize")
     async def _prize(self, ctx: commands.Context, amount: commands.Range[int, 10, 2**30]):
-        """Changes the Champions Pot amount."""
+        """Changes the Gladiator Champions Pot amount."""
         currency = await bank.get_currency_name(ctx.guild)
         await self.config.guild(ctx.guild).prize.set(amount)
         await ctx.send(f"Champions pot set to {amount} dollars.")
@@ -315,7 +315,7 @@ class BattleRoyale(commands.Cog):
             title="Roman Colosseum Games Settings",
             color=await ctx.embed_color(),
             description=(
-                f"**Champions Pot Amount:** {prize}"
+                f"**Gladiator Champions Pot Amount:** {prize}"
                 f"\n**Wait:** {wait} seconds"
                 f"\n**Emoji:** {emoji}"
                 f"\n**Cooldown:** {cooldown}"
