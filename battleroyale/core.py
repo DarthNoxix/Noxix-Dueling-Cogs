@@ -354,9 +354,9 @@ class BattleRoyale(commands.Cog):
         await join_view.on_timeout()
 
         players: List[discord.Member] = list(join_view.players)
-        if len(players) < 3:
+        if len(players) < 2:
             embed.description = (
-                f"Not enough players to start. (need at least 3, {len(players)} found)."
+                f"Not enough players to start. (need at least 2, {len(players)} found)."
             )
             self.battleroyale.reset_cooldown(ctx)
             with contextlib.suppress(discord.NotFound, discord.HTTPException):
