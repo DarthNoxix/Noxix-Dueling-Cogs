@@ -70,7 +70,7 @@ class Game:
             self.original_message: discord.Message = original_message
         else:
             embed: discord.Embed = discord.Embed(
-                title="BattleRoyale", color=await self.ctx.embed_color()
+                title="Roman Gladiator Games", color=await self.ctx.embed_color()
             )
             remaining_players_str = humanize_list(
                 [
@@ -154,7 +154,7 @@ class Game:
         )
         places_text = list(pagify(places_text, page_length=2000))[0]
         embed: discord.Embed = discord.Embed(
-            title="BattleRoyale",
+            title="Roman Gladiator Games",
             color=await self.ctx.embed_color(),
         )
         winner_prompt = random.choice(WINNER_PROMPTS).format(winner=f"**{winner.display_name}**")
