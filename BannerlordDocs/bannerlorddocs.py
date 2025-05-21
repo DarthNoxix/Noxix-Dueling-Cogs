@@ -1,7 +1,8 @@
 from __future__ import annotations
-import asyncio, re, os, time, json, html
+import re, os, time, json, html
 from pathlib import Path
 from typing import List, Tuple
+from urllib.parse import urljoin
 
 import aiohttp, openai
 from bs4 import BeautifulSoup, SoupStrainer, element as bs4element
@@ -9,20 +10,18 @@ from openai import AsyncOpenAI, RateLimitError
 from rapidfuzz import fuzz
 from redbot.core import commands
 
-ROOT_URL   = "https://docs.bannerlordmodding.lt"
-START_URL  = f"{ROOT_URL}/"
-CACHE_TTL  = 12 * 60 * 60          # refresh every 12 h
-MAX_PAGES  = 300                   # safety cap
-GPT_MODEL  = "gpt-4o"          # was "gpt-4o-mini"
-CHUNK_CHARS = 12000            # optional: send bigger chunks now that context = 128k
-PRESELECT  = 100               # your new value
-
+ROOT_URL    = "https://docs.bannerlordmodding.lt"
+CACHE_TTL   = 12 * 60 * 60            # refresh every 12 h
+MAX_PAGES   = 300                     # safety cap
+CHUNK_CHARS = 60_000                  # ≈15 k tokens with gpt-4o
+PRESELECT   = 100                     # chunks forwarded to GPT
+GPT_MODEL   = "gpt-4o"                # better reasoning, still cheap
 
 DATA_DIR = Path(__file__).parent / ".cache"
 DATA_DIR.mkdir(exist_ok=True)
 
 
-# ─── OpenAI-key helper ─────────────────────────────────────────────────
+# ─── OpenAI helper ──────────────────────────────────────────────────────
 async def get_openai_client(bot, guild):
     api = None
     assistant = bot.get_cog("Assistant")
@@ -37,37 +36,38 @@ async def get_openai_client(bot, guild):
     return AsyncOpenAI(api_key=api)
 
 
-# ─── crawler / on-disk cache ───────────────────────────────────────────
+# ─── crawler & cache ────────────────────────────────────────────────────
 class SiteCache:
     def __init__(self):
-        self.index_file = DATA_DIR / "docs_index.json"
-        self.pages: dict[str, str] = {}   # url → plain text
-        self.last_fetch = 0.0
+        self.file = DATA_DIR / "docs_index.json"
+        self.pages: dict[str, str] = {}
+        self.stamp = 0.0
 
     def fresh(self):
-        return self.pages and (time.time() - self.last_fetch) < CACHE_TTL
+        return self.pages and (time.time() - self.stamp) < CACHE_TTL
 
     async def load(self):
-        if self.index_file.exists():
-            raw = json.loads(self.index_file.read_text(encoding="utf-8"))
-            self.pages = raw["pages"]
-            self.last_fetch = raw["time"]
+        if self.file.exists():
+            data = json.loads(self.file.read_text(encoding="utf-8"))
+            self.pages, self.stamp = data["pages"], data["time"]
 
     def save(self):
-        self.index_file.write_text(
-            json.dumps({"pages": self.pages, "time": self.last_fetch}, ensure_ascii=False),
+        self.file.write_text(
+            json.dumps({"pages": self.pages, "time": self.stamp}, ensure_ascii=False),
             encoding="utf-8",
         )
 
     async def crawl(self, session):
-        self.pages.clear()
-        queue = [START_URL]
+        queue = [ROOT_URL + "/"]
         seen: set[str] = set()
+        self.pages.clear()
+
         while queue and len(self.pages) < MAX_PAGES:
             url = queue.pop(0)
             if url in seen:
                 continue
             seen.add(url)
+
             try:
                 async with session.get(url) as r:
                     if r.status != 200 or "text/html" not in r.headers.get("content-type", ""):
@@ -76,24 +76,20 @@ class SiteCache:
             except Exception:
                 continue
 
-            # store plain-text body
             self.pages[url] = self.html_to_text(html_text)
 
-            # collect same-site links
             soup = BeautifulSoup(html_text, "lxml", parse_only=SoupStrainer("a"))
             for link in soup:
-                if not isinstance(link, bs4element.Tag):            # <-- skip Doctype etc.
+                if not isinstance(link, bs4element.Tag):
                     continue
                 href = link.get("href", "")
-                if not href or href.startswith("#") or (
-                    "://" in href and not href.startswith(ROOT_URL)
-                ):
+                if not href or href.startswith("#"):
                     continue
-                full = href if href.startswith(ROOT_URL) else ROOT_URL + href.lstrip("/")
-                if full not in seen:
+                full = urljoin(ROOT_URL + "/", href)
+                if full.startswith(ROOT_URL) and full not in seen:
                     queue.append(full)
 
-        self.last_fetch = time.time()
+        self.stamp = time.time()
         self.save()
 
     @staticmethod
@@ -104,7 +100,7 @@ class SiteCache:
         return soup.get_text("\n", strip=True)
 
 
-# ─── main Cog ──────────────────────────────────────────────────────────
+# ─── main Cog ───────────────────────────────────────────────────────────
 class BannerlordDocs(commands.Cog):
     """Answer any Bannerlord-modding question using docs.bannerlordmodding.lt."""
 
@@ -113,14 +109,15 @@ class BannerlordDocs(commands.Cog):
         self.cache = SiteCache()
         self._session: aiohttp.ClientSession | None = None
 
-    # Register function with Assistant
+    # assistant registration
     @commands.Cog.listener()
-    async def on_assistant_cog_add(self, cog: commands.Cog):
+    async def on_assistant_cog_add(self, cog):
         await cog.register_function(
             cog_name="BannerlordDocs",
             schema={
                 "name": "ask_modding_docs",
-                "description": "Answer a Mount & Blade Bannerlord modding question using the docs site.",
+                "description": "Answer a Mount & Blade II: Bannerlord modding question "
+                               "using the official docs site.",
                 "parameters": {
                     "type": "object",
                     "properties": {"question": {"type": "string"}},
@@ -129,44 +126,48 @@ class BannerlordDocs(commands.Cog):
             },
         )
 
-    # Assistant-callable method
+    # assistant-callable
     async def ask_modding_docs(self, question: str, guild=None, *_, **__) -> dict:
         await self.ensure_cache()
+
+        # build chunk list
         chunks: List[Tuple[str, str]] = []
         for url, text in self.cache.pages.items():
             for seg in self.segment(text):
                 chunks.append((url, seg))
 
-        # simple keyword scoring
-        key_words = re.sub(r"\W+", " ", question.lower()).split()
+        # keyword scoring
+        words = re.sub(r"\W+", " ", question.lower()).split()
         scored = []
         for url, seg in chunks:
             score = fuzz.token_set_ratio(question, seg)
             scored.append((score, url, seg))
+        # always include segments that contain *every* word
+        must = [(999, url, seg) for url, seg in chunks if all(w in seg.lower() for w in words)]
         scored.sort(reverse=True)
-        candidates = scored[:PRESELECT]
+        candidates = (must + scored)[:PRESELECT]
 
         client = await get_openai_client(self.bot, guild or (self.bot.guilds[0] if self.bot.guilds else None))
-        sys_msg = (
-            "Using ONLY the provided text, answer the question if possible.\n"
-            'Respond JSON {"found":true,"answer":"...","excerpt":"..."} or {"found":false}.'
-        )
+        sys = ("Using ONLY the provided text, answer the question if possible. "
+               'Respond JSON {"found":true,"answer":"...","excerpt":"..."} '
+               'or {"found":false}. Output JSON only.')
 
         for _, url, seg in candidates:
             try:
-                resp = await client.chat.completions.create(
+                r = await client.chat.completions.create(
                     model=GPT_MODEL,
                     messages=[
-                        {"role": "system", "content": sys_msg},
+                        {"role": "system", "content": sys},
                         {"role": "user", "content": f"QUESTION: {question}\n\nTEXT:\n{seg}"},
                     ],
                     temperature=0.0,
                     response_format={"type": "json_object"},
                 )
             except RateLimitError:
-                return {"found": False, "result_text": "❌ OpenAI rate-limited me; try later."}
+                return {"found": False,
+                        "result_text": "❌ OpenAI rate-limited me; please try again shortly."}
 
-            data = json.loads(resp.choices[0].message.content)
+            data = json.loads(r.choices[0].message.content)
             if data.get("found"):
                 answer  = html.unescape(data.get("answer", ""))
                 excerpt = data.get("excerpt", "")
@@ -175,13 +176,14 @@ class BannerlordDocs(commands.Cog):
                     "result_text": f"**Answer:** {answer}\n\n*Source:* <{url}>\n\n> {excerpt}"
                 }
 
-        return {"found": False, "result_text": "❌ I couldn’t find an answer on the docs."}
+        return {"found": False,
+                "result_text": "❌ I couldn’t find an answer on the docs."}
 
-    # manual crawl
+    # owner command to refresh
     @commands.is_owner()
     @commands.command(name="parsedocs")
-    async def parse_docs(self, ctx):
-        await ctx.send("⏳ Crawling Bannerlord docs…")
+    async def parsedocs_cmd(self, ctx):
+        await ctx.send("⏳ Crawling Bannerlord docs… this may take a minute.")
         await self.ensure_cache(force=True)
         await ctx.send(f"Indexed {len(self.cache.pages)} pages ✔️")
 
@@ -194,10 +196,9 @@ class BannerlordDocs(commands.Cog):
             await self.cache.crawl(self._session)
 
     @staticmethod
-    def segment(text: str) -> List[str]:
-        parts, buff = [], []
-        chars = 0
-        for line in text.splitlines():
+    def segment(txt: str) -> List[str]:
+        parts, buff, chars = [], [], 0
+        for line in txt.splitlines():
             buff.append(line)
             chars += len(line)
             if chars >= CHUNK_CHARS:
