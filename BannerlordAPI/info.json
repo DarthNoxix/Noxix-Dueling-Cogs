@@ -1,0 +1,18 @@
+{
+    "author": [
+        "Noxix"
+    ],
+    "description": "Parses the bannerlord API website and gives answers",
+    "disabled" : false,
+    "end_user_data_statement" : "This cog stores provided settings.",
+    "hidden": false,
+    "install_msg": "Ready to parse! Use $parseapi to get started.",
+    "min_bot_version" : "3.4.8",
+    "min_python_version" : [3, 8, 1],
+    "permissions" : ["embed_links", "manage_roles"],
+    "required_cogs" : {},
+    "requirements" : [],
+    "short": "Parser for BL Docs",
+    "tags" : ["utility", "roles", "sync", "join", "assistant", "cross-server"],
+    "type": "COG"
+}
