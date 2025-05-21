@@ -4,43 +4,11 @@ import json, math, os, re, time, unicodedata
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import aiohttp
+import aiohttp, openai
 from bs4 import BeautifulSoup
-from redbot.core import commands, Config
-
-# ─── OpenAI v1 lazy init ──────────────────────────────────────────────────────
-import openai
 from openai import AsyncOpenAI
-
-_openai_client: AsyncOpenAI | None = None        # populated on first real use
-
-
-async def _get_openai_client(bot) -> AsyncOpenAI:
-    """
-    Lazily create an AsyncOpenAI client, pulling the key from:
-      1. openai.api_key (if Assistant already set it)
-      2. $OPENAI_API_KEY
-      3. Red shared API tokens: [p]set api openai key <KEY>
-    """
-    global _openai_client
-    if _openai_client:
-        return _openai_client
-
-    key = getattr(openai, "api_key", None) or os.getenv("OPENAI_API_KEY")
-
-    if not key:
-        tokens = await bot.get_shared_api_tokens("openai")
-        key = tokens.get("key") or tokens.get("api_key") if tokens else None
-
-    if not key:
-        raise RuntimeError(
-            "OpenAI API key not found. "
-            "Set it with `[p]set api openai key YOUR_KEY` or export OPENAI_API_KEY."
-        )
-
-    _openai_client = AsyncOpenAI(api_key=key)
-    return _openai_client
-# ──────────────────────────────────────────────────────────────────────────────
+from openai.error import InvalidRequestError, RateLimitError
+from redbot.core import commands, Config
 
 CRASH_URL   = "https://docs.bannerlordmodding.lt/modding/crashes/"
 CACHE_TTL   = 12 * 60 * 60
@@ -49,6 +17,43 @@ GPT_MODEL   = "gpt-4o-mini"
 
 DATA_DIR = Path(__file__).parent / ".cache"
 DATA_DIR.mkdir(exist_ok=True)
+
+_openai_client: AsyncOpenAI | None = None
+
+
+async def _get_openai_client(bot, guild) -> AsyncOpenAI:
+    """
+    Return a lazily-initialised OpenAI client, sourcing the key from:
+      1. Assistant cog’s per-guild settings
+      2. $OPENAI_API_KEY
+      3. Red shared API tokens  ([p]set api openai key …)
+    """
+    global _openai_client
+    if _openai_client:
+        return _openai_client
+
+    # 1) Assistant per-guild key
+    api_key = None
+    assistant = bot.get_cog("Assistant")
+    if assistant and guild:
+        api_key = assistant.db.get_conf(guild).api_key or None
+
+    # 2) Environment variable
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    # 3) Shared token store
+    if not api_key:
+        tokens = await bot.get_shared_api_tokens("openai")
+        api_key = tokens.get("key") if tokens else None
+
+    if not api_key:
+        raise RuntimeError(
+            "OpenAI key not found. "
+            "Set one with `[p]assist openaikey`, an env var, or `[p]set api openai key`."
+        )
+
+    _openai_client = AsyncOpenAI(api_key=api_key)
+    return _openai_client
 
 
 class Section:
@@ -62,50 +67,52 @@ class Section:
 
 
 class BannerlordCrashes(commands.Cog):
-    """AI-powered Bannerlord crash lookup."""
+    """AI-powered Bannerlord crash lookup (quota-safe)."""
 
     def __init__(self, bot):
         self.bot = bot
         self._session: aiohttp.ClientSession | None = None
         self._sections: List[Section] = []
-        self._cache_ts: float = 0.0
-
+        self._cache_ts = 0.0
         self.config = Config.get_conf(self, identifier=0xC0DED06)
         self.config.register_global(last_refresh=0.0)
 
-    # ----- Assistant integration ------------------------------------------------
+    # ───── Assistant integration ──────────────────────────────────────────
     @commands.Cog.listener()
     async def on_assistant_cog_add(self, cog: commands.Cog):
         await cog.register_function(
             cog_name="BannerlordCrashes",
             schema={
                 "name": "search_crash_database",
-                "description": (
-                    "Fuzzy-search the Bannerlord crash database and return reason & solution."
-                ),
+                "description": "Find reason & solution for a Bannerlord crash (fuzzy).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "Crash name / description"}
+                        "query": {"type": "string", "description": "Crash name / snippet"}
                     },
                     "required": ["query"],
                 },
             },
         )
 
-    # ----- Assistant-callable function ------------------------------------------
+    # ───── Assistant-callable search ──────────────────────────────────────
     async def search_crash_database(self, query: str, *_, **__) -> dict:
         await self._ensure_index()
 
-        q_vec = await self._embed_text(query)
-        sec, score = self._semantic_lookup(q_vec)
+        # Try semantic search; fall back if embeddings unavailable
+        try:
+            q_vec = await self._embed_text(query)
+        except (RateLimitError, InvalidRequestError):
+            q_vec = None
+
+        sec, score = self._semantic_lookup(q_vec, query)
 
         if not sec or score < 0.75:
             return {
                 "found": False,
                 "result_text": (
                     "❌ I couldn’t confidently match that crash. "
-                    "Try providing the exact exception or a longer snippet."
+                    "Try the exact exception or give more detail."
                 ),
             }
 
@@ -126,23 +133,23 @@ class BannerlordCrashes(commands.Cog):
             ),
         }
 
-    # ----- Owner / convenience commands -----------------------------------------
+    # ───── Owner command to rebuild cache ─────────────────────────────────
     @commands.is_owner()
     @commands.command(name="parsecrashes")
     async def force_refresh(self, ctx):
         await self._ensure_index(force=True)
         await ctx.send(f"Indexed {len(self._sections)} sections ✔️")
 
+    # Simple lookup command
     @commands.command(name="crashfix")
     async def crashfix_cmd(self, ctx, *, query: str):
         data = await self.search_crash_database(query)
         await ctx.send(data["result_text"][:2000])
 
-    # ----- Index build / refresh -------------------------------------------------
+    # ───── Index build / refresh ──────────────────────────────────────────
     async def _ensure_session(self):
         if not self._session or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30))
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
 
     async def _ensure_index(self, force=False):
         stale = (time.time() - self._cache_ts) > CACHE_TTL
@@ -183,43 +190,62 @@ class BannerlordCrashes(commands.Cog):
 
         await self._embed_all_sections()
 
-    # ----- Embeddings ------------------------------------------------------------
+    # ───── Embedding helpers ──────────────────────────────────────────────
     async def _embed_all_sections(self):
-        client = await _get_openai_client(self.bot)
-        for i in range(0, len(self._sections), 100):
-            chunk = self._sections[i:i + 100]
-            texts = [s.title + "\n" + s.body for s in chunk]
-            resp = await client.embeddings.create(model=EMBED_MODEL, input=texts)
-            for s, e in zip(chunk, resp.data):
-                s.embedding = e.embedding
+        client = await _get_openai_client(self.bot, self.bot.guilds[0] if self.bot.guilds else None)
+        try:
+            for i in range(0, len(self._sections), 100):
+                chunk = self._sections[i:i + 100]
+                texts = [s.title + "\n" + s.body for s in chunk]
+                resp = await client.embeddings.create(model=EMBED_MODEL, input=texts)
+                for s, e in zip(chunk, resp.data):
+                    s.embedding = e.embedding
+        except (RateLimitError, InvalidRequestError):
+            for s in self._sections:
+                s.embedding = None
+            self.bot.logger.warning("Embeddings unavailable – using substring search fallback.")
 
     async def _embed_text(self, text: str) -> List[float]:
-        client = await _get_openai_client(self.bot)
+        client = await _get_openai_client(self.bot, self.bot.guilds[0] if self.bot.guilds else None)
         resp = await client.embeddings.create(model=EMBED_MODEL, input=[text])
         return resp.data[0].embedding
 
-    def _semantic_lookup(self, q: List[float]) -> Tuple[Optional[Section], float]:
-        def cos(a, b):
-            dot = sum(x * y for x, y in zip(a, b))
-            na = math.sqrt(sum(x * x for x in a))
-            nb = math.sqrt(sum(y * y for y in b))
-            return dot / (na * nb + 1e-6)
+    # ───── Lookup logic ───────────────────────────────────────────────────
+    def _semantic_lookup(
+        self, q_vec: Optional[List[float]], raw_query: str
+    ) -> Tuple[Optional[Section], float]:
+        # Embeddings available
+        if q_vec and self._sections and self._sections[0].embedding is not None:
+            def cos(a, b):
+                dot = sum(x * y for x, y in zip(a, b))
+                na = math.sqrt(sum(x * x for x in a))
+                nb = math.sqrt(sum(y * y for y in b))
+                return dot / (na * nb + 1e-6)
 
-        best, score = None, 0.0
+            best, score = None, 0.0
+            for sec in self._sections:
+                s = cos(q_vec, sec.embedding)
+                if s > score:
+                    best, score = sec, s
+            return best, score
+
+        # Substring fallback
+        norm_query = self._normalize(raw_query)
         for sec in self._sections:
-            s = cos(q, sec.embedding)
-            if s > score:
-                best, score = sec, s
-        return best, score
+            if norm_query in self._normalize(sec.title):
+                return sec, 1.0
+            if norm_query in self._normalize(sec.body):
+                return sec, 0.9
+        return None, 0.0
 
-    # ----- GPT-4o extraction -----------------------------------------------------
+    # ───── GPT-4o extraction ----------------------------------------------------
     async def _extract_with_llm(self, sec: Section) -> Tuple[str | None, str | None]:
-        client = await _get_openai_client(self.bot)
-        sys_prompt = (
-            "Extract the crash reason (cause) and solution (fix) from the text. "
-            "Return JSON with keys `reason` and `solution`, empty strings if absent."
-        )
         try:
+            client = await _get_openai_client(self.bot, self.bot.guilds[0] if self.bot.guilds else None)
+            sys_prompt = (
+                "Extract the crash reason and solution. "
+                "Return JSON {\"reason\": \"\", \"solution\": \"\"} (empty strings if missing)."
+            )
             resp = await client.chat.completions.create(
                 model=GPT_MODEL,
                 messages=[
@@ -234,7 +260,7 @@ class BannerlordCrashes(commands.Cog):
         except Exception:
             return self._heuristic_extract(sec.body)
 
-    # ----- Heuristic fallback ----------------------------------------------------
+    # ───── Heuristic fallback ---------------------------------------------------
     @staticmethod
     def _heuristic_extract(body: str) -> Tuple[str | None, str | None]:
         reason = solution = None
@@ -248,10 +274,15 @@ class BannerlordCrashes(commands.Cog):
             reason = body.split(".")[0].strip()
         return reason, solution
 
-    # ----- Utils -----------------------------------------------------------------
+    # ───── Utilities ------------------------------------------------------------
     @staticmethod
-    def _anchor_from_title(t: str) -> str:
-        return re.sub(r"\s+", "-", re.sub(r"[^\w\- ]", "", t).strip().lower())
+    def _normalize(text: str) -> str:
+        norm = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+        return re.sub(r"\W+", "", norm).lower()
+
+    @staticmethod
+    def _anchor_from_title(title: str) -> str:
+        return re.sub(r"\s+", "-", re.sub(r"[^\w\- ]", "", title).strip().lower())
 
     async def cog_unload(self):
         if self._session and not self._session.closed:
