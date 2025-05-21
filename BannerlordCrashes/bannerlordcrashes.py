@@ -256,13 +256,4 @@ class BannerlordCrashes(commands.Cog):
         if self._session and not self._session.closed:
             await self._session.close()
 
-# ---------- helper to pull key from env / Red config --------- #
-def get_openai_key() -> str:
-    # Option 1: environment variable
-    if os.getenv("OPENAI_API_KEY"):
-        return os.environ["OPENAI_API_KEY"]
-    # Option 2: Red’s shared config (if you store it there)
-    # from redbot.core import Config; cfg = Config.get_conf("OpenAIKey", 12345)
-    # return await cfg.api_key()
-    raise RuntimeError("Set OPENAI_API_KEY environment variable")
-openai.api_key = get_openai_key()
+
