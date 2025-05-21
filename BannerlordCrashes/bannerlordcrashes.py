@@ -6,8 +6,7 @@ from typing import List, Optional, Tuple
 
 import aiohttp, openai
 from bs4 import BeautifulSoup
-from openai import AsyncOpenAI
-from openai.error import InvalidRequestError, RateLimitError
+from openai import AsyncOpenAI, RateLimitError, BadRequestError
 from redbot.core import commands, Config
 
 CRASH_URL   = "https://docs.bannerlordmodding.lt/modding/crashes/"
@@ -22,12 +21,6 @@ _openai_client: AsyncOpenAI | None = None
 
 
 async def _get_openai_client(bot, guild) -> AsyncOpenAI:
-    """
-    Return a lazily-initialised OpenAI client, sourcing the key from:
-      1. Assistant cog’s per-guild settings
-      2. $OPENAI_API_KEY
-      3. Red shared API tokens  ([p]set api openai key …)
-    """
     global _openai_client
     if _openai_client:
         return _openai_client
@@ -38,10 +31,10 @@ async def _get_openai_client(bot, guild) -> AsyncOpenAI:
     if assistant and guild:
         api_key = assistant.db.get_conf(guild).api_key or None
 
-    # 2) Environment variable
+    # 2) Env var
     api_key = api_key or os.getenv("OPENAI_API_KEY")
 
-    # 3) Shared token store
+    # 3) Shared tokens
     if not api_key:
         tokens = await bot.get_shared_api_tokens("openai")
         api_key = tokens.get("key") if tokens else None
@@ -58,10 +51,8 @@ async def _get_openai_client(bot, guild) -> AsyncOpenAI:
 
 class Section:
     __slots__ = ("title", "body", "anchor", "embedding")
-
     def __init__(self, title: str, body: str):
-        self.title = title
-        self.body = body.strip()
+        self.title, self.body = title, body.strip()
         self.anchor = BannerlordCrashes._anchor_from_title(title)
         self.embedding: List[float] | None = None
 
@@ -77,7 +68,7 @@ class BannerlordCrashes(commands.Cog):
         self.config = Config.get_conf(self, identifier=0xC0DED06)
         self.config.register_global(last_refresh=0.0)
 
-    # ───── Assistant integration ──────────────────────────────────────────
+    # ───────────────── Assistant registration ─────────────
     @commands.Cog.listener()
     async def on_assistant_cog_add(self, cog: commands.Cog):
         await cog.register_function(
@@ -95,14 +86,13 @@ class BannerlordCrashes(commands.Cog):
             },
         )
 
-    # ───── Assistant-callable search ──────────────────────────────────────
+    # ───────────────── Assistant-callable ──────────────────
     async def search_crash_database(self, query: str, *_, **__) -> dict:
         await self._ensure_index()
 
-        # Try semantic search; fall back if embeddings unavailable
         try:
             q_vec = await self._embed_text(query)
-        except (RateLimitError, InvalidRequestError):
+        except RateLimitError:
             q_vec = None
 
         sec, score = self._semantic_lookup(q_vec, query)
@@ -118,7 +108,6 @@ class BannerlordCrashes(commands.Cog):
 
         reason, solution = await self._extract_with_llm(sec)
         url = f"{CRASH_URL}#{sec.anchor}"
-
         return {
             "found": True,
             "title": sec.title,
@@ -133,20 +122,19 @@ class BannerlordCrashes(commands.Cog):
             ),
         }
 
-    # ───── Owner command to rebuild cache ─────────────────────────────────
+    # ───────────────── Owner helper ────────────────────────
     @commands.is_owner()
     @commands.command(name="parsecrashes")
     async def force_refresh(self, ctx):
         await self._ensure_index(force=True)
         await ctx.send(f"Indexed {len(self._sections)} sections ✔️")
 
-    # Simple lookup command
     @commands.command(name="crashfix")
     async def crashfix_cmd(self, ctx, *, query: str):
         data = await self.search_crash_database(query)
         await ctx.send(data["result_text"][:2000])
 
-    # ───── Index build / refresh ──────────────────────────────────────────
+    # ───────────────── Index building ──────────────────────
     async def _ensure_session(self):
         if not self._session or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
@@ -155,7 +143,6 @@ class BannerlordCrashes(commands.Cog):
         stale = (time.time() - self._cache_ts) > CACHE_TTL
         if self._sections and not (force or stale):
             return
-
         cache_file = DATA_DIR / "sections.json"
         if not force and cache_file.exists():
             raw = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -164,7 +151,6 @@ class BannerlordCrashes(commands.Cog):
                 s.anchor, s.embedding = d["anchor"], d["embedding"]
             self._cache_ts = time.time()
             return
-
         await self._scrape_and_embed()
         cache_file.write_text(json.dumps([
             {"title": s.title, "body": s.body, "anchor": s.anchor, "embedding": s.embedding}
@@ -174,116 +160,97 @@ class BannerlordCrashes(commands.Cog):
 
     async def _scrape_and_embed(self):
         await self._ensure_session()
-        async with self._session.get(CRASH_URL) as resp:
-            html = await resp.text()
-
+        async with self._session.get(CRASH_URL) as r:
+            html = await r.text()
         soup = BeautifulSoup(html, "lxml")
-        self._sections.clear()
-
-        for hdr in soup.select("h2, h3"):
-            title = hdr.get_text(strip=True)
-            parts, node = [], hdr.find_next_sibling()
-            while node and node.name not in ("h2", "h3"):
-                parts.append(node.get_text(" ", strip=True))
-                node = node.find_next_sibling()
+        self._sections = []
+        for h in soup.select("h2, h3"):
+            title = h.get_text(strip=True)
+            parts, n = [], h.find_next_sibling()
+            while n and n.name not in ("h2", "h3"):
+                parts.append(n.get_text(" ", strip=True))
+                n = n.find_next_sibling()
             self._sections.append(Section(title, "\n".join(parts)))
-
         await self._embed_all_sections()
 
-    # ───── Embedding helpers ──────────────────────────────────────────────
+    # ───────────────── Embeddings ──────────────────────────
     async def _embed_all_sections(self):
         client = await _get_openai_client(self.bot, self.bot.guilds[0] if self.bot.guilds else None)
         try:
             for i in range(0, len(self._sections), 100):
-                chunk = self._sections[i:i + 100]
-                texts = [s.title + "\n" + s.body for s in chunk]
+                chunk = self._sections[i:i+100]
+                texts = [s.title+"\n"+s.body for s in chunk]
                 resp = await client.embeddings.create(model=EMBED_MODEL, input=texts)
                 for s, e in zip(chunk, resp.data):
                     s.embedding = e.embedding
-        except (RateLimitError, InvalidRequestError):
+        except RateLimitError:
             for s in self._sections:
                 s.embedding = None
-            self.bot.logger.warning("Embeddings unavailable – using substring search fallback.")
+            self.bot.logger.warning("Embeddings quota exhausted – using substring fallback.")
 
     async def _embed_text(self, text: str) -> List[float]:
         client = await _get_openai_client(self.bot, self.bot.guilds[0] if self.bot.guilds else None)
         resp = await client.embeddings.create(model=EMBED_MODEL, input=[text])
         return resp.data[0].embedding
 
-    # ───── Lookup logic ───────────────────────────────────────────────────
-    def _semantic_lookup(
-        self, q_vec: Optional[List[float]], raw_query: str
-    ) -> Tuple[Optional[Section], float]:
-        # Embeddings available
+    # ───────────────── Search logic ───────────────────────
+    def _semantic_lookup(self, q_vec: Optional[List[float]], raw: str):
         if q_vec and self._sections and self._sections[0].embedding is not None:
-            def cos(a, b):
-                dot = sum(x * y for x, y in zip(a, b))
-                na = math.sqrt(sum(x * x for x in a))
-                nb = math.sqrt(sum(y * y for y in b))
-                return dot / (na * nb + 1e-6)
+            def cos(a,b):
+                dot=sum(x*y for x,y in zip(a,b))
+                na=math.sqrt(sum(x*x for x in a)); nb=math.sqrt(sum(y*y for y in b))
+                return dot/(na*nb+1e-6)
+            best=None; score=0.0
+            for s in self._sections:
+                sc=cos(q_vec,s.embedding)
+                if sc>score:
+                    best,score=s,sc
+            return best,score
+        norm=self._normalize(raw)
+        for s in self._sections:
+            if norm in self._normalize(s.title):
+                return s,1.0
+            if norm in self._normalize(s.body):
+                return s,0.9
+        return None,0.0
 
-            best, score = None, 0.0
-            for sec in self._sections:
-                s = cos(q_vec, sec.embedding)
-                if s > score:
-                    best, score = sec, s
-            return best, score
-
-        # Substring fallback
-        norm_query = self._normalize(raw_query)
-        for sec in self._sections:
-            if norm_query in self._normalize(sec.title):
-                return sec, 1.0
-            if norm_query in self._normalize(sec.body):
-                return sec, 0.9
-        return None, 0.0
-
-    # ───── GPT-4o extraction ----------------------------------------------------
-    async def _extract_with_llm(self, sec: Section) -> Tuple[str | None, str | None]:
+    # ───────────────── GPT extraction ─────────────────────
+    async def _extract_with_llm(self, sec: Section):
         try:
             client = await _get_openai_client(self.bot, self.bot.guilds[0] if self.bot.guilds else None)
-            sys_prompt = (
-                "Extract the crash reason and solution. "
-                "Return JSON {\"reason\": \"\", \"solution\": \"\"} (empty strings if missing)."
-            )
+            sys = "Extract crash reason and solution as JSON {\"reason\":\"\",\"solution\":\"\"}."
             resp = await client.chat.completions.create(
                 model=GPT_MODEL,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": sec.body},
-                ],
+                messages=[{"role":"system","content":sys},
+                          {"role":"user","content":sec.body}],
                 temperature=0.0,
-                response_format={"type": "json_object"},
+                response_format={"type":"json_object"},
             )
-            data = json.loads(resp.choices[0].message.content)
-            return data.get("reason"), data.get("solution")
+            data=json.loads(resp.choices[0].message.content)
+            return data.get("reason"),data.get("solution")
         except Exception:
-            return self._heuristic_extract(sec.body)
+            return self._heuristic(sec.body)
 
-    # ───── Heuristic fallback ---------------------------------------------------
     @staticmethod
-    def _heuristic_extract(body: str) -> Tuple[str | None, str | None]:
-        reason = solution = None
+    def _heuristic(body):
+        reason=solution=None
         for line in body.splitlines():
-            l = line.lower()
+            l=line.lower()
             if l.startswith("reason"):
-                reason = line.partition(":")[2].strip()
+                reason=line.partition(":")[2].strip()
             elif l.startswith("solution"):
-                solution = line.partition(":")[2].strip()
+                solution=line.partition(":")[2].strip()
         if not reason:
-            reason = body.split(".")[0].strip()
-        return reason, solution
+            reason=body.split(".")[0].strip()
+        return reason,solution
 
-    # ───── Utilities ------------------------------------------------------------
+    # ───────────────── Utils ──────────────────────────────
     @staticmethod
-    def _normalize(text: str) -> str:
-        norm = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
-        return re.sub(r"\W+", "", norm).lower()
-
+    def _normalize(txt):
+        return re.sub(r"\W+","",unicodedata.normalize("NFKD",txt).encode("ascii","ignore").decode()).lower()
     @staticmethod
-    def _anchor_from_title(title: str) -> str:
-        return re.sub(r"\s+", "-", re.sub(r"[^\w\- ]", "", title).strip().lower())
-
+    def _anchor_from_title(t):
+        return re.sub(r"\s+","-",re.sub(r"[^\w\- ]","",t).strip().lower())
     async def cog_unload(self):
         if self._session and not self._session.closed:
             await self._session.close()
