@@ -18,18 +18,17 @@ class BannerlordCrashes(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._session: Optional[aiohttp.ClientSession] = None
-        self._cache: Dict[str, Tuple[str, str]] = {}      # {normalized_title: (title, full_text)}
-        self._cache_time: float = 0                       # unix ts of last refresh
-        # allow manual refresh every 12 h via command
+        self._cache: Dict[str, Tuple[str, str]] = {}   # {normalized_title: (title, full_text)}
+        self._cache_time: float = 0                    # unix ts of last refresh
         self.config = Config.get_conf(self, identifier=0xC0DED06)
         self.config.register_global(last_refresh=0.0)
 
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     # Assistant integration
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     @commands.Cog.listener()
     async def on_assistant_cog_add(self, cog: commands.Cog):
-        """Register Assistant-callable search function."""
+        """Register the function with the Assistant."""
         await cog.register_function(
             cog_name="BannerlordCrashes",
             schema={
@@ -51,37 +50,51 @@ class BannerlordCrashes(commands.Cog):
             },
         )
 
+    # ------------------------- Assistant callable ---------------------- #
     async def search_crash_database(self, query: str, *_, **__) -> dict:
         """
         Assistant-callable method.
-        :param query: crash / exception name supplied by the Assistant.
-        :return: dict with keys: found (bool), title, reason, solution, url
+
+        Returns a dict **MUST** containing `result_text` so the
+        Assistant wrapper can pass it straight back to the user.
         """
         await self._ensure_cache(refresh_if_stale=True)
         key = self._normalize(query)
-        # naive exact-match first, then substring search
-        hit = self._cache.get(key)
+
+        # exact-match first, then substring search
+        hit = self._cache.get(key) or next(
+            (data for norm, data in self._cache.items() if key in norm), None
+        )
+
         if not hit:
-            for norm_title, data in self._cache.items():
-                if key in norm_title:
-                    hit = data
-                    break
-        if not hit:
-            return {"found": False}
+            return {
+                "found": False,
+                "result_text": f"❌ I couldn’t find a crash called **{query}** in the Bannerlord database."
+            }
 
         title, body = hit
         reason, solution = self._extract_reason_solution(body)
+        url = CRASH_URL + f"#{self._anchor_from_title(title)}"
+
+        summary = (
+            f"**{title}**\n"
+            f"**Reason:** {reason or '—'}\n"
+            f"**Solution / Notes:** {solution or '—'}\n"
+            f"<{url}>"
+        )
+
         return {
             "found": True,
             "title": title,
             "reason": reason or "",
             "solution": solution or "",
-            "url": CRASH_URL + f"#{self._anchor_from_title(title)}"
+            "url": url,
+            "result_text": summary
         }
 
-    # ---------------------------------------------------------------------- #
-    # Discord-side quality-of-life commands (optional)
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Discord helper commands (optional)
+    # ------------------------------------------------------------------ #
     @commands.command(name="parsecrashes")
     @commands.is_owner()
     async def force_parse(self, ctx):
@@ -93,21 +106,11 @@ class BannerlordCrashes(commands.Cog):
     async def crash_fix_lookup(self, ctx, *, query: str):
         """Look up a crash/exception reason & fix."""
         data = await self.search_crash_database(query)
-        if not data["found"]:
-            await ctx.send("❌ Couldn’t find that crash in the database.")
-            return
+        await ctx.send(data["result_text"][:2000])
 
-        embed = (
-            f"**{data['title']}**\n\n"
-            f"**Reason:** {data['reason'] or '—'}\n"
-            f"**Solution / Notes:** {data['solution'] or '—'}\n\n"
-            f"<{data['url']}>"
-        )
-        await ctx.send(embed[:2000])
-
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     # Core scraping / parsing helpers
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     async def _ensure_session(self):
         if not self._session or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
@@ -130,15 +133,19 @@ class BannerlordCrashes(commands.Cog):
         for header in soup.select("h2, h3"):
             title = header.get_text(strip=True)
             norm = self._normalize(title)
-            # grab everything until the next h2/h3
+
+            # everything until the next h2/h3
             parts = []
             node = header.find_next_sibling()
             while node and node.name not in ("h2", "h3"):
                 parts.append(node.get_text(" ", strip=True))
                 node = node.find_next_sibling()
-            body = "\n".join(parts)
-            self._cache[norm] = (title, body)
 
+            self._cache[norm] = (title, "\n".join(parts))
+
+    # ------------------------------------------------------------------ #
+    # Utility helpers
+    # ------------------------------------------------------------------ #
     @staticmethod
     def _normalize(text: str) -> str:
         text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
@@ -146,29 +153,21 @@ class BannerlordCrashes(commands.Cog):
 
     @staticmethod
     def _anchor_from_title(title: str) -> str:
-        # replicate MkDocs/GitHub-style id generation
         anchor = re.sub(r"[^\w\- ]", "", title).strip().lower()
-        anchor = re.sub(r"[\s]+", "-", anchor)
-        return anchor
+        return re.sub(r"[\s]+", "-", anchor)
 
     @staticmethod
     def _extract_reason_solution(body: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Heuristically pull out 'REASON:' (and sometimes 'Solution:') lines.
-        """
-        reason, solution = None, None
+        reason = solution = None
         for line in body.splitlines():
             if line.lower().startswith("reason"):
                 reason = line.partition(":")[2].strip()
             elif line.lower().startswith("solution"):
                 solution = line.partition(":")[2].strip()
-        # fallback: split first sentence(s)
         if not reason:
             reason = body.split(".")[0].strip()
         return reason, solution
 
-    # ------------------------------------------------------------------ #
-    # Cog cleanup
     # ------------------------------------------------------------------ #
     async def cog_unload(self):
         if self._session and not self._session.closed:
