@@ -9,8 +9,17 @@ from bs4 import BeautifulSoup
 from redbot.core import commands, Config
 
 # ---------------- OpenAI v1 client ---------------- #
-from openai import AsyncOpenAI                    # pip install --upgrade openai>=1.0
-openai_client = AsyncOpenAI()                     # api_key picked up from env/assistant
+# --- top of bannerlordcrashes.py, after `import os` and before we build the client ---
+import openai
+from openai import AsyncOpenAI
+
+# grab the key from whichever place the Assistant already set it, or from env
+_api_key = getattr(openai, "api_key", None) or os.getenv("OPENAI_API_KEY")
+if not _api_key:
+    raise RuntimeError("OPENAI_API_KEY not found – make sure the Assistant sets it or export it.")
+
+openai_client = AsyncOpenAI(api_key=_api_key)
+                 # api_key picked up from env/assistant
 
 # -------------------------------------------------- #
 
