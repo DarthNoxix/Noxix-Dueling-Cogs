@@ -14,7 +14,7 @@ START_URL  = f"{ROOT_URL}/"
 CACHE_TTL  = 12 * 60 * 60          # refresh every 12 h
 MAX_PAGES  = 300                   # safety cap
 CHUNK_CHARS = 8000                 # ≈ 2 k tokens for gpt-4o
-PRESELECT  = 40                    # chunks passed to GPT
+PRESELECT  = 100                    # chunks passed to GPT
 GPT_MODEL  = "gpt-4o-mini"
 
 DATA_DIR = Path(__file__).parent / ".cache"
@@ -140,7 +140,7 @@ class BannerlordDocs(commands.Cog):
         key_words = re.sub(r"\W+", " ", question.lower()).split()
         scored = []
         for url, seg in chunks:
-            score = max(fuzz.partial_ratio(w, seg.lower()) for w in key_words) if key_words else 0
+            score = fuzz.token_set_ratio(question, seg)
             scored.append((score, url, seg))
         scored.sort(reverse=True)
         candidates = scored[:PRESELECT]
