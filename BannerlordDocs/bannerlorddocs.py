@@ -13,9 +13,10 @@ ROOT_URL   = "https://docs.bannerlordmodding.lt"
 START_URL  = f"{ROOT_URL}/"
 CACHE_TTL  = 12 * 60 * 60          # refresh every 12 h
 MAX_PAGES  = 300                   # safety cap
-CHUNK_CHARS = 8000                 # ≈ 2 k tokens for gpt-4o
-PRESELECT  = 100                    # chunks passed to GPT
-GPT_MODEL  = "gpt-4o-mini"
+GPT_MODEL  = "gpt-4o"          # was "gpt-4o-mini"
+CHUNK_CHARS = 12000            # optional: send bigger chunks now that context = 128k
+PRESELECT  = 100               # your new value
+
 
 DATA_DIR = Path(__file__).parent / ".cache"
 DATA_DIR.mkdir(exist_ok=True)
