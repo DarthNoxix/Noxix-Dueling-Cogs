@@ -424,7 +424,7 @@ class SupportManager(commands.Cog):
 
     # ─────────────────────────────
     # ░ Summaries & inactivity
-    # ─────────────────────────────
+        # ─────────────────────────────
     @commands.command()
     @sc_check()
     async def summary(self, ctx):
@@ -449,12 +449,15 @@ class SupportManager(commands.Cog):
             value="\n".join(f"{ctx.guild.get_member(int(uid)).mention}: +{pts} pts" for uid, pts in top) or "None",
             inline=False,
         )
+
+        # ✅ FIXED: call `await` first, then use result in list comp
+        staff_ids = await self._staff_role_ids(ctx.guild)
+        total_staff = len([m for m in ctx.guild.members if any(r.id in staff_ids for r in m.roles)])
+
         submitted = len(await self.config.guild(ctx.guild).submitted_this_week())
-        total_staff = len(
-            [m for m in ctx.guild.members if any(r.id in await self._staff_role_ids(ctx.guild) for r in m.roles)]
-        )
         embed.add_field(name="Check-ins submitted", value=f"{submitted}/{total_staff}", inline=False)
         await ctx.send(embed=embed)
+
 
     @commands.command()
     @sc_check()
