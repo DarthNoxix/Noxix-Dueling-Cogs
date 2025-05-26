@@ -1,0 +1,25 @@
+{
+    "author": [
+        "Noxix"
+    ],
+    "description": "Check-ins, points, onboarding PDFs, ranks & summaries for the ADOD support team. Weekly check-ins, points, promotions, PDF onboarding, clear-chat, summaries, inactivity reports, role DM-invites and more.",
+    "disabled" : false,
+    "end_user_data_statement" : "This cog stores provided settings.",
+    "hidden": false,
+    "install_msg": "Ready to help the ADOD support team!",
+    "min_bot_version" : "3.4.8",
+    "min_python_version" : [3, 8, 1],
+    "permissions" : ["embed_links", "manage_roles"],
+    "required_cogs" : {},
+    "requirements" : [],
+    "short": "Check-ins, points, onboarding PDFs, ranks & summaries for the ADOD support team.",
+    "tags" : ["utility", "roles", "sync", "join", "assistant", "cross-server"],
+    "type": "COG"
+}
+{
+  "author": ["Geri & ChatGPT"],
+  "name": "SupportManager",
+  "short": "Check-ins, points, onboarding PDFs, ranks & summaries for the ADOD support team.",
+  "description": "A full port of supportbot.py to a Red V3 cog: weekly check-ins, points, promotions, PDF onboarding, clear-chat, summaries, inactivity reports, role DM-invites and more.",
+  "tags": ["support", "adod", "onboarding", "points", "pdf", "staff"]
+}
