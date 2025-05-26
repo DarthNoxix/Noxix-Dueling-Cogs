@@ -16,10 +16,3 @@
     "tags" : ["utility", "roles", "sync", "join", "assistant", "cross-server"],
     "type": "COG"
 }
-{
-  "author": ["Geri & ChatGPT"],
-  "name": "SupportManager",
-  "short": "Check-ins, points, onboarding PDFs, ranks & summaries for the ADOD support team.",
-  "description": "A full port of supportbot.py to a Red V3 cog: weekly check-ins, points, promotions, PDF onboarding, clear-chat, summaries, inactivity reports, role DM-invites and more.",
-  "tags": ["support", "adod", "onboarding", "points", "pdf", "staff"]
-}
