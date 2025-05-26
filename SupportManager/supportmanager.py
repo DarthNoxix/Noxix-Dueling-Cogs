@@ -10,6 +10,7 @@ import datetime
 from collections import defaultdict
 from pathlib import Path
 import discord
+from redbot.core import data_manager 
 from redbot.core import commands, Config, checks
 from redbot.core.utils.chat_formatting import box
 
@@ -103,9 +104,16 @@ class SupportManager(commands.Cog):
         )
 
     # ===============  Path helpers  ===============
-    @property
-    def _data_path(self) -> Path:
-        return Path(str(self.config._get_base_dir()))  # type: ignore
+# ===============  Path helpers  ===============  # add at top of file with other imports
+
+@property
+def _data_path(self) -> Path:
+    """
+    Returns the per-cog data directory, guaranteed by Red.
+    Example: …/data/SupportManager/
+    """
+    return data_manager.cog_data_path(self)
+
 
     async def _pdf_path(self, guild: discord.Guild, display: str) -> Path:
         gfolder = self._data_path / str(guild.id)
