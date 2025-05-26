@@ -525,10 +525,6 @@ class SupportManager(commands.Cog):
         await asyncio.sleep(5)
         await m.delete()
 
-    @commands.command()
-    async def ping(self, ctx):
-        await ctx.send(f"Pong! `{round(self.bot.latency*1000)} ms`")
-
     # optional: auto-notify owners when member crosses threshold
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
