@@ -104,21 +104,21 @@ class SupportManager(commands.Cog):
         )
 
     # ===============  Path helpers  ===============
-# ===============  Path helpers  ===============  # add at top of file with other imports
+    from redbot.core import data_manager  # (already in your imports—keep only one copy)
 
-@property
-def _data_path(self) -> Path:
-    """
-    Returns the per-cog data directory, guaranteed by Red.
-    Example: …/data/SupportManager/
-    """
-    return data_manager.cog_data_path(self)
-
+    @property
+    def _data_path(self) -> Path:
+        """
+        Per-cog data directory guaranteed by Red.
+        Example: …/data/SupportManager/
+        """
+        return data_manager.cog_data_path(self)
 
     async def _pdf_path(self, guild: discord.Guild, display: str) -> Path:
         gfolder = self._data_path / str(guild.id)
         gfolder.mkdir(parents=True, exist_ok=True)
         return gfolder / f"{display}.pdf"
+
 
     # ===============  Point helpers  ===============
     async def _change_points(self, member: discord.Member, delta: int):
