@@ -1,7 +1,18 @@
 {
-    "author": ["Noxix"],
-    "name": "MemberStatus",
-    "short": "Counts members by role and status.",
-    "description": "Counts how many members have a specified role and how many are online, idle, dnd, or offline.",
-    "tags": ["utility", "status", "roles"]
+    "author": [
+        "Noxix"
+    ],
+    "description": "Pim lazy",
+    "disabled" : false,
+    "end_user_data_statement" : "This cog stores provided settings.",
+    "hidden": false,
+    "install_msg": "Ready Nox",
+    "min_bot_version" : "3.4.8",
+    "min_python_version" : [3, 8, 1],
+    "permissions" : ["embed_links", "manage_roles"],
+    "required_cogs" : {},
+    "requirements" : [],
+    "short": "member status manager",
+    "tags" : ["utility", "roles", "sync", "join", "assistant", "cross-server"],
+    "type": "COG"
 }
