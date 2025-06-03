@@ -157,52 +157,44 @@ async def generate_activity_graph(ctx: commands.Context, member: discord.Member)
     return discord.File(bio, filename="activity.png")
 
 # ─────────────────────────────
-#  UI: activity graph selector
+#  UI: activity-graph selector
 # ─────────────────────────────
 class ActivityGraphView(discord.ui.View):
-    """Holds the <select> so it keeps working after edits."""
+    """A 120-s view with one <select> that swaps the graph."""
     def __init__(self, ctx: commands.Context, members: List[discord.Member]):
         super().__init__(timeout=120)
-        self.ctx = ctx
-        self.members = members
-        self.add_item(ActivitySelect(ctx, self))   # pass *view* to child
+        self.add_item(ActivitySelect(ctx, members))     # add the dropdown
 
 
 class ActivitySelect(discord.ui.Select):
-    def __init__(self, ctx: commands.Context, view: discord.ui.View):
-        self.ctx  = ctx
-        self.view = view               # keep a ref so we can re-attach after edit
-        opts = [
-            discord.SelectOption(label=m.display_name, value=str(m.id))
-            for m in view.members
-        ]
-        super().__init__(
-            placeholder="Select member…",
-            min_values=1,
-            max_values=1,
-            options=opts,
-        )
+    def __init__(self, ctx: commands.Context, members: List[discord.Member]):
+        self.ctx = ctx
+        opts = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
+        super().__init__(placeholder="Select member…", min_values=1, max_values=1, options=opts)
 
     async def callback(self, interaction: discord.Interaction):
-        # Acknowledge instantly so the token doesn’t expire (prevents “interaction failed”)
+        # 0. claim the interaction token immediately
         await interaction.response.defer()
 
-        uid     = int(self.values[0])
-        member  = self.ctx.guild.get_member(uid)
+        uid = int(self.values[0])
+        member = self.ctx.guild.get_member(uid)
         if not member:
-            # update the original message so the user sees the error
-            await interaction.edit_original_response(content="Member left the server 🤷", view=self.view)
+            await interaction.edit_original_response(
+                content="Member left the server 🤷",
+                view=self.view
+            )
             return
 
-        # heavy work: render graph
+        # 1. heavy work – render the graph
         file = await generate_activity_graph(self.ctx, member)
 
-        # Replace message content & attachment, keep the same View (dropdown still usable)
+        # 2. edit the original message, keeping the same dropdown active
         await interaction.edit_original_response(
             content=f"📊 Activity graph for {member.mention} (past 7 days)",
             attachments=[file],
-            view=self.view,
+            view=self.view,          # self.view is already set by Discord
         )
+
 
 # ─────────────────────────────
 #  Cog
