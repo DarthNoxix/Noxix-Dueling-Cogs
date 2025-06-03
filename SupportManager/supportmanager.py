@@ -1219,3 +1219,14 @@ class _SupportSlash(commands.Cog):
     @app_commands.command(name="onboard", description="Send the onboarding package to a member.")
     async def slash_onboard(self, inter, member: discord.Member):
         await self._run(inter, self.sm.onboard.callback, member)
+
+        # ──────────────────────────────────────────────
+#  Combined setup – loads *both* cogs
+# ──────────────────────────────────────────────
+from .supportmanager import SupportManagerSlash  # if it lives in the same file, no import
+
+async def setup(bot):
+    """Red 3.x entry-point."""
+    sm = SupportManager(bot)              # classic/hybrid commands
+    await bot.add_cog(sm)
+    await bot.add_cog(SupportManagerSlash(bot, sm))   # slash façade
