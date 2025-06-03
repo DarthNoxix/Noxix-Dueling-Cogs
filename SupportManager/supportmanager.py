@@ -1220,13 +1220,22 @@ class _SupportSlash(commands.Cog):
     async def slash_onboard(self, inter, member: discord.Member):
         await self._run(inter, self.sm.onboard.callback, member)
 
-        # ──────────────────────────────────────────────
-#  Combined setup – loads *both* cogs
 # ──────────────────────────────────────────────
-from .supportmanager import SupportManagerSlash  # if it lives in the same file, no import
+#  Public slash-wrapper alias  (rename!)
+# ──────────────────────────────────────────────
+class SupportManagerSlash(_SupportSlash):
+    """Public alias so Red can `add_cog()` it."""
+    pass
 
+
+# ──────────────────────────────────────────────
+#  Red entry-point – load BOTH cogs
+# ──────────────────────────────────────────────
 async def setup(bot):
-    """Red 3.x entry-point."""
-    sm = SupportManager(bot)              # classic/hybrid commands
+    """Called by Red when you `[p]load` the cog."""
+    sm = SupportManager(bot)          # classic / prefix commands
     await bot.add_cog(sm)
-    await bot.add_cog(SupportManagerSlash(bot, sm))   # slash façade
+
+    # load the slash façade (needs SupportManager already added, so *after* ↑)
+    await bot.add_cog(SupportManagerSlash(bot))
+
