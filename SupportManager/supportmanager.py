@@ -81,7 +81,28 @@ def staff_check():
 def is_small_council():
     return sc_check()
 
-# ────────── optimised activity helpers ──────────
+# ────────── Activity-graph helpers & UI ──────────
+import io
+import matplotlib.pyplot as plt                           # already in your imports, safe to repeat
+
+# 1) points earned per day ------------------------------------------------
+async def _member_daily_points(
+    cog: "SupportManager",
+    member: discord.Member,
+    days: int = 7,
+) -> List[int]:
+    """Return a list of `days` integers – points earned each UTC day, oldest→newest."""
+    today = datetime.datetime.utcnow().date()
+    per_day = Counter()
+
+    for entry in await cog.config.member(member).points_log():
+        ts = datetime.datetime.fromisoformat(entry["timestamp"]).date()
+        if (today - ts).days < days:
+            per_day[ts] += entry["amount"]
+
+    return [per_day[today - datetime.timedelta(days=i)] for i in reversed(range(days))]
+
+# 2) message counts (fast version) ----------------------------------------
 async def _member_daily_messages(
     guild: discord.Guild,
     support_channels: List[int],
@@ -89,11 +110,8 @@ async def _member_daily_messages(
     days: int = 7,
 ) -> Tuple[List[int], List[int]]:
     """
-    Return two lists (support_msgs, other_msgs) for each of the last `days` days.
-
-    We only scan the most-recent 100 messages per channel and break the
-    history loop once we hit a message older than the 7-day cutoff, which
-    keeps the API cost low even in busy servers.
+    Return two series (support_msgs, other_msgs) for the last `days` days.
+    Only the latest 100 msgs / channel are scanned, with early-exit on 7-day cutoff.
     """
     today = datetime.datetime.utcnow().date()
     cutoff_dt = datetime.datetime.utcnow() - datetime.timedelta(days=days)
@@ -101,24 +119,54 @@ async def _member_daily_messages(
     sup_cnt, oth_cnt = Counter(), Counter()
 
     async def scan(ch: discord.TextChannel, is_support: bool):
-        # Discord returns newest → oldest; we can stop early.
         async for m in ch.history(limit=100, oldest_first=False):
             if m.created_at < cutoff_dt:
                 break
             if m.author.id == member.id:
                 (sup_cnt if is_support else oth_cnt)[m.created_at.date()] += 1
 
-    # Run many history scans concurrently
-    await asyncio.gather(
-        *[scan(ch, ch.id in support_channels) for ch in guild.text_channels]
-    )
+    await asyncio.gather(*[scan(ch, ch.id in support_channels) for ch in guild.text_channels])
 
     def series(cnt: Counter) -> List[int]:
         return [cnt[today - datetime.timedelta(days=i)] for i in reversed(range(days))]
 
     return series(sup_cnt), series(oth_cnt)
 
-# ────────── UI view with fast caching & defer ──────────
+# 3) PNG figure builder ----------------------------------------------------
+async def generate_activity_graph(
+    ctx: commands.Context,
+    member: discord.Member,
+    days: int = 7,
+) -> discord.File:
+    """Render a 7-day activity PNG (points + messages) for `member`."""
+    guild_conf = ctx.cog
+    sup_ch_ids = await guild_conf.config.guild(ctx.guild).support_channels() or []
+
+    # data
+    pts      = await _member_daily_points(guild_conf, member, days)
+    sup_msgs, oth_msgs = await _member_daily_messages(ctx.guild, sup_ch_ids, member, days)
+    labels = [
+        (datetime.datetime.utcnow().date() - datetime.timedelta(days=i)).strftime("%d %b")
+        for i in reversed(range(days))
+    ]
+
+    # matplotlib
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.plot(labels, pts, marker="o", label="Points earned")
+    ax.bar(labels, sup_msgs, alpha=0.5, label="Msgs in support-channels")
+    ax.bar(labels, oth_msgs, bottom=sup_msgs, alpha=0.3, label="Msgs elsewhere")
+    ax.set_title(f"Activity (last {days} days) — {member.display_name}")
+    ax.set_ylabel("Count")
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    buf.seek(0)
+    plt.close(fig)
+    return discord.File(buf, filename="activity.png")
+
+# 4) UI View + Select with caching & fast ACK ------------------------------
 class ActivityGraphView(discord.ui.View):
     def __init__(
         self,
@@ -129,46 +177,50 @@ class ActivityGraphView(discord.ui.View):
     ):
         super().__init__(timeout=180)
         self.ctx = ctx
-        # cache graphs we’ve already rendered during this view’s lifetime
         self.cache: dict[int, discord.File] = {seed_id: seed_file}
-
-        # build dropdown
-        options = [
-            discord.SelectOption(label=m.display_name, value=str(m.id))
-            for m in members
-        ]
+        options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
         self.add_item(ActivitySelect(self, options))
 
-
 class ActivitySelect(discord.ui.Select):
-    def __init__(self, parent_view: ActivityGraphView, options: List[discord.SelectOption]):
-        super().__init__(
-            placeholder="Select member…",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-        self.view_ref = parent_view  # easier access
+    def __init__(self, parent: ActivityGraphView, options: List[discord.SelectOption]):
+        super().__init__(placeholder="Select member…", min_values=1, max_values=1, options=options)
+        self.parent_view = parent
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(thinking=True)  # ⏱️ immediate ACK (<250 ms)
+        await interaction.response.defer(thinking=True)          # instant ACK
 
         uid = int(self.values[0])
-        member = self.view_ref.ctx.guild.get_member(uid)
-        if not member:
+        member = self.parent_view.ctx.guild.get_member(uid)
+        if member is None:
             return await interaction.followup.send("Member left the server.", ephemeral=True)
 
-        # cached?
-        if uid in self.view_ref.cache:
-            file = self.view_ref.cache[uid]
-        else:
-            file = await generate_activity_graph(self.view_ref.ctx, member)
-            self.view_ref.cache[uid] = file
+        if uid not in self.parent_view.cache:
+            self.parent_view.cache[uid] = await generate_activity_graph(self.parent_view.ctx, member)
 
         await interaction.edit_original_message(
             content=f"📊 Activity graph for {member.mention} (past 7 days)",
-            attachments=[file],
+            attachments=[self.parent_view.cache[uid]],
         )
+
+# 5) command that launches the view ----------------------------------------
+@commands.command()
+@is_small_council()
+async def activitygraphsetup(self, ctx: commands.Context):
+    """Show an interactive 7-day activity graph for Support staff."""
+    members = [m for m in ctx.guild.members if any(r.name in SUPPORT_ROLE_NAMES for r in m.roles)]
+    if not members:
+        return await ctx.send("⚠ No eligible members found with the specified roles.")
+
+    default = members[0]
+    first_file = await generate_activity_graph(ctx, default)
+    view = ActivityGraphView(ctx, members, default.id, first_file)
+
+    await ctx.send(
+        content=f"📊 Activity graph for {default.mention} (past 7 days)",
+        file=first_file,
+        view=view,
+    )
+
 # ─────────────────────────────
 #  Cog
 # ─────────────────────────────
