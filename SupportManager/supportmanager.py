@@ -1066,7 +1066,9 @@ class SupportManager(commands.Cog):
 #  ONE-FILE SLASH WRAPPERS  (all commands, Context fix applied)
 # ────────────────────────────────────────────────────────────────
 
+
 async def _ctx_from_inter(inter: discord.Interaction) -> Context:
+    """Turn an Interaction into a *real*, awaited Red Context."""
     return await Context.from_interaction(inter)
 
 
@@ -1101,9 +1103,19 @@ class _SupportSlash(commands.Cog):
     async def slash_removepoints(self, inter, member: discord.Member, pts: int):
         await self._run_ephemeral(inter, self.sm.removepoints.callback, member, pts)
 
-    @app_commands.command(name="award")
-    async def slash_award(self, inter, member: discord.Member, *reasons: str):
-        await self._run_ephemeral(inter, self.sm.award.callback, member, *reasons)
+    @app_commands.command(
+        name="award",
+        description="(SC) Award / deduct points; give one or more reason-keys separated by spaces."
+    )
+    async def slash_award(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        reasons: str                       # <─ one text box, user types:  help link correction
+    ):
+        reason_list = [r for r in reasons.split() if r]
+        # defer & pass through
+        await self._run_ephemeral(inter, self.sm.award.callback, member, *reason_list)
 
     @app_commands.command(name="awardreasons")
     async def slash_awardreasons(self, inter):
