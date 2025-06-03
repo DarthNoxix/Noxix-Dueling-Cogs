@@ -1063,13 +1063,11 @@ class SupportManager(commands.Cog):
         await ctx.send(f"⬇️ Demoted {member.display_name}.")
 
 # ────────────────────────────────────────────────────────────────
-#  ONE-FILE SLASH WRAPPERS 
+#  ONE-FILE SLASH WRAPPERS  (all commands, Context fix applied)
 # ────────────────────────────────────────────────────────────────
 
-# Helper – turn an Interaction into a fake Context so we can reuse the
-# original text-command coroutine without touching it.
-def _ctx_from_inter(inter: discord.Interaction) -> Context:
-    return Context.from_interaction(inter)
+async def _ctx_from_inter(inter: discord.Interaction) -> Context:
+    return await Context.from_interaction(inter)
 
 
 class _SupportSlash(commands.Cog):
@@ -1077,165 +1075,156 @@ class _SupportSlash(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.sm = bot.get_cog("SupportManager")  # must already be loaded
+        self.sm: SupportManager = bot.get_cog("SupportManager")  # must already be loaded
 
-    # --------------  Utility shortcuts  -----------------
+    # ───────── Utility shortcuts ─────────
     async def _run(self, inter: discord.Interaction, coro, *args, **kwargs):
-        """Defer (so we don't time-out) then await the original command."""
-        await inter.response.defer(thinking=True, ephemeral=False)
-        await coro(self.sm, _ctx_from_inter(inter), *args, **kwargs)
+        await inter.response.defer(thinking=True)
+        ctx = await _ctx_from_inter(inter)
+        await coro(self.sm, ctx, *args, **kwargs)
 
-    async def _run_ephemeral(self, inter, coro, *args, **kw):
+    async def _run_ephemeral(self, inter: discord.Interaction, coro, *args, **kwargs):
         await inter.response.defer(thinking=True, ephemeral=True)
-        await coro(self.sm, _ctx_from_inter(inter), *args, **kw)
+        ctx = await _ctx_from_inter(inter)
+        await coro(self.sm, ctx, *args, **kwargs)
 
-    # --------------  PER-COMMAND WRAPPERS  ----------------
-    # ---- points / awards / leaderboard -------------------
-    @app_commands.command(name="points", description="Show your (or another member’s) Support points.")
-    async def slash_points(self, inter: discord.Interaction, member: discord.Member | None = None):
+    # ───────── points / awards / leaderboard ─────────
+    @app_commands.command(name="points")
+    async def slash_points(self, inter, member: discord.Member | None = None):
         await self._run_ephemeral(inter, self.sm.points.callback, member)
 
-    @app_commands.command(name="addpoints", description="(SC) Add points to a member.")
+    @app_commands.command(name="addpoints")
     async def slash_addpoints(self, inter, member: discord.Member, pts: int):
         await self._run_ephemeral(inter, self.sm.addpoints.callback, member, pts)
 
-    @app_commands.command(name="removepoints", description="(SC) Remove points from a member.")
+    @app_commands.command(name="removepoints")
     async def slash_removepoints(self, inter, member: discord.Member, pts: int):
         await self._run_ephemeral(inter, self.sm.removepoints.callback, member, pts)
 
-    @app_commands.command(name="award", description="(SC) Award / deduct points by reason key.")
-    async def slash_award(self, inter, member: discord.Member, reason: str):
-        await self._run_ephemeral(inter, self.sm.award.callback, member, reason)
+    @app_commands.command(name="award")
+    async def slash_award(self, inter, member: discord.Member, *reasons: str):
+        await self._run_ephemeral(inter, self.sm.award.callback, member, *reasons)
 
-    @app_commands.command(name="awardreasons", description="Show valid award reason keys.")
+    @app_commands.command(name="awardreasons")
     async def slash_awardreasons(self, inter):
         await self._run_ephemeral(inter, self.sm.awardreasons.callback)
 
-    @app_commands.command(name="leaderboard", description="Show the Support points leaderboard.")
+    @app_commands.command(name="leaderboard")
     async def slash_leaderboard(self, inter, top: int = 10):
         await self._run(inter, self.sm.leaderboard.callback, top)
 
-    # ---- activity & monitoring ---------------------------
-    @app_commands.command(name="activitygraphsetup", description="Interactive 7-day activity graph.")
+    # ───────── activity & monitoring ─────────
+    @app_commands.command(name="activitygraphsetup")
     async def slash_activitygraphsetup(self, inter):
         await self._run(inter, self.sm.activitygraphsetup.callback)
 
-    @app_commands.command(name="cupteam", description="Support members sorted by tenure in role.")
+    @app_commands.command(name="cupteam")
     async def slash_cupteam(self, inter):
         await self._run(inter, self.sm.cupteam.callback)
 
-    @app_commands.command(name="noactivity", description="Support members with 0 support msgs in 7 days.")
+    @app_commands.command(name="noactivity")
     async def slash_noactivity(self, inter):
         await self._run(inter, self.sm.noactivity.callback)
 
-    @app_commands.command(name="delta", description="Weekly delta (points & check-ins vs last week).")
+    @app_commands.command(name="delta")
     async def slash_delta(self, inter):
         await self._run(inter, self.sm.delta.callback)
 
-    @app_commands.command(name="summary", description="Weekly summary (top earners, check-ins).")
+    @app_commands.command(name="summary")
     async def slash_summary(self, inter):
         await self._run(inter, self.sm.summary.callback)
 
-    @app_commands.command(name="inactive", description="Support staff with no check-in in 7 days.")
+    @app_commands.command(name="inactive")
     async def slash_inactive(self, inter):
         await self._run(inter, self.sm.inactive.callback)
 
-    # ---- goal system ------------------------------------
-    @app_commands.command(name="assigngoal", description="Assign a weekly goal to a member.")
+    # ───────── goal system ─────────
+    @app_commands.command(name="assigngoal")
     async def slash_assigngoal(self, inter, member: discord.Member, *, goal: str):
         await self._run(inter, self.sm.assigngoal.callback, member, goal=goal)
 
-    @app_commands.command(name="goalsummary", description="List all current goals.")
+    @app_commands.command(name="goalsummary")
     async def slash_goalsummary(self, inter):
         await self._run_ephemeral(inter, self.sm.goalsummary.callback)
 
-    @app_commands.command(name="removegoal", description="Remove a member’s goal.")
+    @app_commands.command(name="removegoal")
     async def slash_removegoal(self, inter, member: discord.Member):
         await self._run(inter, self.sm.removegoal.callback, member)
 
-    @app_commands.command(name="completegoal", description="Mark a member’s goal as completed.")
+    @app_commands.command(name="completegoal")
     async def slash_completegoal(self, inter, member: discord.Member):
         await self._run(inter, self.sm.completegoal.callback, member)
 
-    # ---- support-channel registry ------------------------
-    @app_commands.command(name="addsupportchannel", description="Add a channel to Support registry.")
-    async def slash_addsc(self, inter, channel: discord.TextChannel):
+    # ───────── support-channel registry ─────────
+    @app_commands.command(name="addsupportchannel")
+    async def slash_addsupportchannel(self, inter, channel: discord.TextChannel):
         await self._run(inter, self.sm.addsupportchannel.callback, channel)
 
-    @app_commands.command(name="removesupportchannel", description="Remove a channel from Support registry.")
-    async def slash_removesc(self, inter, channel: discord.TextChannel):
+    @app_commands.command(name="removesupportchannel")
+    async def slash_removesupportchannel(self, inter, channel: discord.TextChannel):
         await self._run(inter, self.sm.removesupportchannel.callback, channel)
 
-    @app_commands.command(name="listsupportchannels", description="List registered Support channels.")
-    async def slash_listsc(self, inter):
+    @app_commands.command(name="listsupportchannels")
+    async def slash_listsupportchannels(self, inter):
         await self._run_ephemeral(inter, self.sm.listsupportchannels.callback)
 
-    # ---- check-in workflow -------------------------------
-    @app_commands.command(name="opencheckins", description="Open the weekly check-in window.")
+    # ───────── check-in workflow ─────────
+    @app_commands.command(name="opencheckins")
     async def slash_opencheckins(self, inter):
         await self._run(inter, self.sm.opencheckins.callback)
 
-    @app_commands.command(name="checkin", description="Submit your Support check-in.")
+    @app_commands.command(name="checkin")
     async def slash_checkin(self, inter):
         await self._run_ephemeral(inter, self.sm.checkin.callback)
 
-    @app_commands.command(name="acceptcheckin", description="(SC) Approve & close a check-in channel.")
-    async def slash_accept(self, inter):
+    @app_commands.command(name="acceptcheckin")
+    async def slash_acceptcheckin(self, inter):
         await self._run(inter, self.sm.accept.callback)
 
-    @app_commands.command(name="excuse", description="(SC) Excuse a member for this week’s check-in.")
+    @app_commands.command(name="excuse")
     async def slash_excuse(self, inter, member: discord.Member):
         await self._run(inter, self.sm.excuse.callback, member)
 
-    @app_commands.command(name="closecheckins", description="Close check-ins and penalise absentees.")
+    @app_commands.command(name="closecheckins")
     async def slash_closecheckins(self, inter):
         await self._run(inter, self.sm.closecheckins.callback)
 
-    @app_commands.command(name="pingteam", description="Ping staff who haven’t checked in this week.")
+    @app_commands.command(name="pingteam")
     async def slash_pingteam(self, inter):
         await self._run(inter, self.sm.pingteam.callback)
 
-    # ---- promotions / demotions --------------------------
-    @app_commands.command(name="promote", description="(SC) Promote a Support member.")
+    # ───────── promotions / demotions ─────────
+    @app_commands.command(name="promote")
     async def slash_promote(self, inter, member: discord.Member):
         await self._run(inter, self.sm.promote.callback, member)
 
-    @app_commands.command(name="demote", description="(SC) Demote a Support member.")
+    @app_commands.command(name="demote")
     async def slash_demote(self, inter, member: discord.Member):
         await self._run(inter, self.sm.demote.callback, member)
 
-    # ---- PDF onboarding ----------------------------------
-    @app_commands.command(name="uploadpdf", description="(SC) Upload an onboarding PDF.")
+    # ───────── PDF onboarding ─────────
+    @app_commands.command(name="uploadpdf")
     async def slash_uploadpdf(self, inter, display_name: str, file: discord.Attachment):
-        # mimic the text-command’s “attachment on the message” expectation
-        ctx = _ctx_from_inter(inter)
+        ctx = await _ctx_from_inter(inter)
         ctx.message.attachments = [file]
         await self._run(inter, self.sm.upload_pdf.callback, display_name)
 
-    @app_commands.command(name="listpdfs", description="List stored onboarding PDFs.")
+    @app_commands.command(name="listpdfs")
     async def slash_listpdfs(self, inter):
         await self._run_ephemeral(inter, self.sm.list_pdfs.callback)
 
-    @app_commands.command(name="onboard", description="Send the onboarding package to a member.")
+    @app_commands.command(name="onboard")
     async def slash_onboard(self, inter, member: discord.Member):
         await self._run(inter, self.sm.onboard.callback, member)
 
 # ──────────────────────────────────────────────
-#  Public slash-wrapper alias  (rename!)
-# ──────────────────────────────────────────────
 class SupportManagerSlash(_SupportSlash):
-    """Public alias so Red can `add_cog()` it."""
+    """Public alias so Red can add the cog."""
     pass
 
 
 # ──────────────────────────────────────────────
-#  Red entry-point – load BOTH cogs
-# ──────────────────────────────────────────────
 async def setup(bot):
-    """Called by Red when you `[p]load` the cog."""
-    sm = SupportManager(bot)          # classic / prefix commands
+    sm = SupportManager(bot)          # prefix / hybrid
     await bot.add_cog(sm)
-
-    # load the slash façade (needs SupportManager already added, so *after* ↑)
     await bot.add_cog(SupportManagerSlash(bot))
-
