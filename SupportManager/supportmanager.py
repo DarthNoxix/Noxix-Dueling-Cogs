@@ -554,53 +554,12 @@ class SupportManager(commands.Cog):
         else:
             await ctx.send(f"⏰ These members still need to check in:\n{', '.join(unsubmitted)}")
 
-    # ─────────────────────────────
-    #  Existing owner-level setup (supportset …)  ← unchanged
-    # ─────────────────────────────
-    # ... (UNCHANGED CODE BETWEEN THIS AND AWARD SECTION OMITTED FOR BREVITY) ...
-
-    # ─────────────────────────────
-    #  Points & awards  (updated for multi-reason)
-    # ─────────────────────────────
-    @commands.hybrid_command()
-    async def awardreasons(self, ctx):
-        await ctx.send(box("\n".join(f"- {r}: {p:+}" for r, (p, _) in AWARD_REASONS.items())))
-
-    @commands.hybrid_command()
-    @sc_check()
-    async def award(self, ctx, member: discord.Member, *reasons: str):
-        """!award @user reason [reason …]  – award/deduct for multiple reasons."""
-        if not reasons:
-            await ctx.send("Specify at least one reason (see !awardreasons).")
-            return
-        total_delta = 0
-        invalid = []
-        details = []
-        for r in reasons:
-            if r not in AWARD_REASONS:
-                invalid.append(r)
-                continue
-            delta, desc = AWARD_REASONS[r]
-            total_delta += delta
-            details.append(f"{delta:+} ({r})")
-        if invalid:
-            await ctx.send(f"Invalid reasons: {', '.join(invalid)}")
-            return
-        await self._change_points(member, total_delta)
-        await ctx.send(
-            f"🏅 **{member.display_name}** {('gains' if total_delta>0 else 'loses')} "
-            f"**{abs(total_delta)}** pts → total **{await self._points(member)}** "
-            f"({' ,'.join(details)})"
-        )
 
     # ─────────────────────────────
     #  Weekly check-in workflow (Q5 text tweak)
     # ─────────────────────────────
-    #  -- (existing opencheckins, checkin etc. kept exactly as before,
-    #      but question 5 changed) --
+ 
 
-    # Replace originals for brevity only: the check-in command below
-    # is identical to your current one except Q5 wording updated
     @commands.hybrid_command()
     @staff_check()
     async def checkin(self, ctx):
