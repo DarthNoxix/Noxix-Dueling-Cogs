@@ -400,47 +400,47 @@ class SupportManager(commands.Cog):
                 + "\n".join(f"• {n}" for n in inactive)
             )
 
-    # ---- Weekly delta report -----------------------------
-@commands.command()
-@is_small_council()
-async def delta(self, ctx):
-    """Compare check-ins & points this week vs last."""
-    today = datetime.datetime.utcnow().date()
-    this_week_start = today - datetime.timedelta(days=today.weekday())          # Monday
-    last_week_start = this_week_start - datetime.timedelta(weeks=1)
-    last_week_end   = this_week_start - datetime.timedelta(seconds=1)
+        # ---- Weekly delta report -----------------------------
+    @commands.command()
+    @is_small_council()
+    async def delta(self, ctx):
+        """Compare check-ins & points this week vs last."""
+        today = datetime.datetime.utcnow().date()
+        this_week_start = today - datetime.timedelta(days=today.weekday())          # Monday
+        last_week_start = this_week_start - datetime.timedelta(weeks=1)
+        last_week_end   = this_week_start - datetime.timedelta(seconds=1)
 
-    # --- Tally check-ins ---
-    this_check = 0
-    last_check = 0
-    for member in ctx.guild.members:
-        for entry in await self.config.member(member).checkins():
-            d = datetime.datetime.fromisoformat(entry["timestamp"]).date()
-            if d >= this_week_start:
-                this_check += 1
-            elif last_week_start <= d <= last_week_end:
-                last_check += 1
+        # --- Tally check-ins ---
+        this_check = 0
+        last_check = 0
+        for member in ctx.guild.members:
+            for entry in await self.config.member(member).checkins():
+                d = datetime.datetime.fromisoformat(entry["timestamp"]).date()
+                if d >= this_week_start:
+                    this_check += 1
+                elif last_week_start <= d <= last_week_end:
+                    last_check += 1
 
-    # --- Tally points ---
-    this_pts = 0
-    last_pts = 0
-    for member in ctx.guild.members:
-        for log in await self.config.member(member).points_log():
-            d = datetime.datetime.fromisoformat(log["timestamp"]).date()
-            if d >= this_week_start:
-                this_pts += log["amount"]
-            elif last_week_start <= d <= last_week_end:
-                last_pts += log["amount"]
+        # --- Tally points ---
+        this_pts = 0
+        last_pts = 0
+        for member in ctx.guild.members:
+            for log in await self.config.member(member).points_log():
+                d = datetime.datetime.fromisoformat(log["timestamp"]).date()
+                if d >= this_week_start:
+                    this_pts += log["amount"]
+                elif last_week_start <= d <= last_week_end:
+                    last_pts += log["amount"]
 
-    # --- Embed ---
-    def arrow(n): return "🔺" if n > 0 else ("🔻" if n < 0 else "⏸️")
-    embed = discord.Embed(title="📊 Weekly Delta Report", color=0x00bfff)
-    embed.add_field(name="Check-ins",
-        value=f"{this_check} ({arrow(this_check-last_check)} {this_check-last_check:+})", inline=True)
-    embed.add_field(name="Points Earned",
-        value=f"{this_pts} ({arrow(this_pts-last_pts)} {this_pts-last_pts:+})", inline=True)
+        # --- Embed ---
+        def arrow(n): return "🔺" if n > 0 else ("🔻" if n < 0 else "⏸️")
+        embed = discord.Embed(title="📊 Weekly Delta Report", color=0x00bfff)
+        embed.add_field(name="Check-ins",
+            value=f"{this_check} ({arrow(this_check-last_check)} {this_check-last_check:+})", inline=True)
+        embed.add_field(name="Points Earned",
+            value=f"{this_pts} ({arrow(this_pts-last_pts)} {this_pts-last_pts:+})", inline=True)
 
-    await ctx.send(embed=embed)
+        await ctx.send(embed=embed)
 
 
     # ---- Goal system -------------------------------------
