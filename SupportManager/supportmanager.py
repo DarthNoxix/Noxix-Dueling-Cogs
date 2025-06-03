@@ -576,7 +576,7 @@ class SupportManager(commands.Cog):
         total_delta = 0
         invalid = []
         details = []
-        for r in reasons:
+        for r in reasons.split():
             if r not in AWARD_REASONS:
                 invalid.append(r)
                 continue
@@ -805,7 +805,7 @@ class SupportManager(commands.Cog):
 
     @commands.hybrid_command()
     @sc_check()
-    async def award(self, ctx, member: discord.Member, reason: str.lower):
+    async def award(self, ctx, member: discord.Member, reasons: str):
         if reason not in AWARD_REASONS:
             await ctx.send(f"Invalid reason. Use one of: {', '.join(AWARD_REASONS)}")
             return
