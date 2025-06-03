@@ -21,7 +21,9 @@ import matplotlib.pyplot as plt
 from redbot.core import checks, commands, Config, data_manager
 from redbot.core.utils.chat_formatting import box
 from typing import Tuple
-from redbot.core import commands  # already there
+from redbot.core.commands import Context
+from redbot.core import app_commands
+
 
 
 __all__ = ("SupportManager",)
@@ -275,7 +277,7 @@ class SupportManager(commands.Cog):
     # ─────────────────────────────
     #  Small-Council utility commands (new)
     # ─────────────────────────────
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def activitygraphsetup(self, ctx: commands.Context):
         """Create an interactive 7-day activity graph for Support staff."""
@@ -296,7 +298,7 @@ class SupportManager(commands.Cog):
         )
 
     # ---- Support-channel registry --------------------------
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def addsupportchannel(self, ctx, channel: discord.TextChannel):
         """Add a text channel to the support-channel set."""
@@ -307,7 +309,7 @@ class SupportManager(commands.Cog):
             sc.append(channel.id)
         await ctx.send(f"✅ Added {channel.mention} as a support channel.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def removesupportchannel(self, ctx, channel: discord.TextChannel):
         """Remove a channel from the support-channel set."""
@@ -318,7 +320,7 @@ class SupportManager(commands.Cog):
             sc.remove(channel.id)
         await ctx.send(f"🗑️ Removed {channel.mention} from support channels.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def listsupportchannels(self, ctx):
         ids = await self.config.guild(ctx.guild).support_channels()
@@ -330,7 +332,7 @@ class SupportManager(commands.Cog):
         await ctx.send("📋 **Current Support Channels:**\n" + "\n".join(lines))
 
     # ---- Cup-team overview --------------------------------
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def cupteam(self, ctx):
         """List support members sorted by time in current rank."""
@@ -376,7 +378,7 @@ class SupportManager(commands.Cog):
         await ctx.send(embed=embed)
 
     # ---- Inactivity report -------------------------------
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def noactivity(self, ctx):
         """List support staff who haven’t spoken in any support channel in 7 days."""
@@ -416,7 +418,7 @@ class SupportManager(commands.Cog):
             )
 
         # ---- Weekly delta report -----------------------------
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def delta(self, ctx):
         """Compare check-ins & points this week vs last."""
@@ -459,7 +461,7 @@ class SupportManager(commands.Cog):
 
 
     # ---- Goal system -------------------------------------
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def assigngoal(self, ctx, member: discord.Member, *, goal: str):
         """Assign a weekly goal to a staff member."""
@@ -476,7 +478,7 @@ class SupportManager(commands.Cog):
         except discord.Forbidden:
             await ctx.send("⚠️ Couldn’t DM the user.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def goalsummary(self, ctx):
         goals = await self.config.guild(ctx.guild).goals()
@@ -502,7 +504,7 @@ class SupportManager(commands.Cog):
         )
         await ctx.send(embed=embed)
 
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def removegoal(self, ctx, member: discord.Member):
         gid = str(member.id)
@@ -513,7 +515,7 @@ class SupportManager(commands.Cog):
             del goals[gid]
         await ctx.send(f"🗑️ Removed goal for {member.display_name}.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def completegoal(self, ctx, member: discord.Member):
         gid = str(member.id)
@@ -529,7 +531,7 @@ class SupportManager(commands.Cog):
         )
 
     # ---- Ping team for missing check-ins ------------------
-    @commands.hybrid_command()
+    @commands.command()
     @is_small_council()
     async def pingteam(self, ctx):
         """Ping staff who haven’t checked in this week."""
@@ -556,11 +558,48 @@ class SupportManager(commands.Cog):
 
 
     # ─────────────────────────────
+    #  Points & awards  (updated for multi-reason)
+    # ─────────────────────────────
+    @commands.command()
+    async def awardreasons(self, ctx):
+        await ctx.send(box("\n".join(f"- {r}: {p:+}" for r, (p, _) in AWARD_REASONS.items())))
+
+    @commands.command()
+    @sc_check()
+    async def award(self, ctx, member: discord.Member, *reasons: str):
+        """!award @user reason [reason …]  – award/deduct for multiple reasons."""
+        if not reasons:
+            await ctx.send("Specify at least one reason (see !awardreasons).")
+            return
+        total_delta = 0
+        invalid = []
+        details = []
+        for r in reasons:
+            if r not in AWARD_REASONS:
+                invalid.append(r)
+                continue
+            delta, desc = AWARD_REASONS[r]
+            total_delta += delta
+            details.append(f"{delta:+} ({r})")
+        if invalid:
+            await ctx.send(f"Invalid reasons: {', '.join(invalid)}")
+            return
+        await self._change_points(member, total_delta)
+        await ctx.send(
+            f"🏅 **{member.display_name}** {('gains' if total_delta>0 else 'loses')} "
+            f"**{abs(total_delta)}** pts → total **{await self._points(member)}** "
+            f"({' ,'.join(details)})"
+        )
+
+    # ─────────────────────────────
     #  Weekly check-in workflow (Q5 text tweak)
     # ─────────────────────────────
- 
+    #  -- (existing opencheckins, checkin etc. kept exactly as before,
+    #      but question 5 changed) --
 
-    @commands.hybrid_command()
+    # Replace originals for brevity only: the check-in command below
+    # is identical to your current one except Q5 wording updated
+    @commands.command()
     @staff_check()
     async def checkin(self, ctx):
         gconf = self.config.guild(ctx.guild)
@@ -643,7 +682,7 @@ class SupportManager(commands.Cog):
     # ─────────────────────────────
     # ░ Owner-level setup (supportset …)
     # ─────────────────────────────
-    @commands.hybrid_group(name="supportset", invoke_without_command=True)
+    @commands.group(name="supportset", invoke_without_command=True)
     @commands.guild_only()
     @checks.is_owner()
     async def supportset(self, ctx):
@@ -701,7 +740,7 @@ class SupportManager(commands.Cog):
     # ─────────────────────────────
     # ░ PDF onboarding
     # ─────────────────────────────
-    @commands.hybrid_command(name="uploadpdf")
+    @commands.command(name="uploadpdf")
     @sc_check()
     async def upload_pdf(self, ctx, *, display_name: str):
         if not ctx.message.attachments:
@@ -717,12 +756,12 @@ class SupportManager(commands.Cog):
             pdfs[display_name] = att.filename
         await ctx.send(f"📄 Stored **{display_name}**.")
 
-    @commands.hybrid_command(name="listpdfs")
+    @commands.command(name="listpdfs")
     async def list_pdfs(self, ctx):
         pdfs = await self.config.guild(ctx.guild).pdfs()
         await ctx.send("No PDFs uploaded." if not pdfs else box("\n".join(f"- {n}" for n in pdfs)))
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def onboard(self, ctx, member: discord.Member):
         staff_ids = await self._staff_role_ids(ctx.guild)
@@ -745,24 +784,24 @@ class SupportManager(commands.Cog):
     # ─────────────────────────────
     # ░ Points & awards
     # ─────────────────────────────
-    @commands.hybrid_command()
+    @commands.command()
     async def points(self, ctx, member: discord.Member = None):
         member = member or ctx.author
         await ctx.send(f"{member.mention} has **{await self._points(member)}** points.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def addpoints(self, ctx, member: discord.Member, pts: int):
         await self._change_points(member, pts)
         await ctx.send(f"Added {pts} points → {await self._points(member)} total.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def removepoints(self, ctx, member: discord.Member, pts: int):
         await self._change_points(member, -pts)
         await ctx.send(f"Removed {pts} points → {await self._points(member)} total.")
 
-    @commands.hybrid_command(with_app_command=False)
+    @commands.command()
     @sc_check()
     async def award(self, ctx, member: discord.Member, reason: str.lower):
         if reason not in AWARD_REASONS:
@@ -773,11 +812,11 @@ class SupportManager(commands.Cog):
         verb = "awarded" if delta > 0 else "deducted"
         await ctx.send(f"{verb.title()} **{abs(delta)}** points {desc} → total {await self._points(member)}.")
 
-    @commands.hybrid_command()
+    @commands.command()
     async def awardreasons(self, ctx):
         await ctx.send(box("\n".join(f"- {r}: {p:+}" for r, (p, _) in AWARD_REASONS.items())))
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def leaderboard(self, ctx, top: int = 10):
         mdata = await self.config.all_members(ctx.guild)
@@ -792,7 +831,7 @@ class SupportManager(commands.Cog):
     # ─────────────────────────────
     # ░ Weekly check-in workflow
     # ─────────────────────────────
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def opencheckins(self, ctx):
         g = self.config.guild(ctx.guild)
@@ -804,7 +843,7 @@ class SupportManager(commands.Cog):
             f"✅ Check-ins are now **open**.\n{ping}"
         )
 
-    @commands.hybrid_command()
+    @commands.command()
     @staff_check()
     async def checkin(self, ctx):
         gconf = self.config.guild(ctx.guild)
@@ -887,7 +926,7 @@ class SupportManager(commands.Cog):
         await asyncio.sleep(10)
         await ch.delete()
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def accept(self, ctx):
         if not ctx.channel.name.startswith("checkin-"):
@@ -897,7 +936,7 @@ class SupportManager(commands.Cog):
         await asyncio.sleep(1)
         await ctx.channel.delete()
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def excuse(self, ctx, member: discord.Member):
         async with self.config.guild(ctx.guild).excused_this_week() as ex:
@@ -907,7 +946,7 @@ class SupportManager(commands.Cog):
             ex.append(str(member.id))
         await ctx.send(f"{member.mention} excused for this week.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def closecheckins(self, ctx):
         g = self.config.guild(ctx.guild)
@@ -930,7 +969,7 @@ class SupportManager(commands.Cog):
     # ─────────────────────────────
     # ░ Summaries & inactivity
         # ─────────────────────────────
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def summary(self, ctx):
         now = datetime.datetime.utcnow()
@@ -964,7 +1003,7 @@ class SupportManager(commands.Cog):
         await ctx.send(embed=embed)
 
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def inactive(self, ctx):
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=7)
@@ -991,7 +1030,7 @@ class SupportManager(commands.Cog):
     # ─────────────────────────────
     # ░ Promotions / demotions
     # ─────────────────────────────
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def promote(self, ctx, member: discord.Member):
         roles = [discord.utils.get(ctx.guild.roles, id=r) for r in await self._staff_role_ids(ctx.guild)]
@@ -1007,7 +1046,7 @@ class SupportManager(commands.Cog):
             await log.send(f"📈 {member.mention} promoted to **{roles[idx + 1].name}** by {ctx.author.mention}")
         await ctx.send(f"✅ Promoted {member.display_name}.")
 
-    @commands.hybrid_command()
+    @commands.command()
     @sc_check()
     async def demote(self, ctx, member: discord.Member):
         roles = [discord.utils.get(ctx.guild.roles, id=r) for r in await self._staff_role_ids(ctx.guild)]
@@ -1023,3 +1062,160 @@ class SupportManager(commands.Cog):
             await log.send(f"📉 {member.mention} demoted to **{roles[idx - 1].name}** by {ctx.author.mention}")
         await ctx.send(f"⬇️ Demoted {member.display_name}.")
 
+# ────────────────────────────────────────────────────────────────
+#  ONE-FILE SLASH WRAPPERS 
+# ────────────────────────────────────────────────────────────────
+
+# Helper – turn an Interaction into a fake Context so we can reuse the
+# original text-command coroutine without touching it.
+def _ctx_from_inter(inter: discord.Interaction) -> Context:
+    return Context.from_interaction(inter)
+
+
+class _SupportSlash(commands.Cog):
+    """Thin façade that re-routes slash calls to the existing text commands."""
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.sm = bot.get_cog("SupportManager")  # must already be loaded
+
+    # --------------  Utility shortcuts  -----------------
+    async def _run(self, inter: discord.Interaction, coro, *args, **kwargs):
+        """Defer (so we don't time-out) then await the original command."""
+        await inter.response.defer(thinking=True, ephemeral=False)
+        await coro(self.sm, _ctx_from_inter(inter), *args, **kwargs)
+
+    async def _run_ephemeral(self, inter, coro, *args, **kw):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await coro(self.sm, _ctx_from_inter(inter), *args, **kw)
+
+    # --------------  PER-COMMAND WRAPPERS  ----------------
+    # ---- points / awards / leaderboard -------------------
+    @app_commands.command(name="points", description="Show your (or another member’s) Support points.")
+    async def slash_points(self, inter: discord.Interaction, member: discord.Member | None = None):
+        await self._run_ephemeral(inter, self.sm.points.callback, member)
+
+    @app_commands.command(name="addpoints", description="(SC) Add points to a member.")
+    async def slash_addpoints(self, inter, member: discord.Member, pts: int):
+        await self._run_ephemeral(inter, self.sm.addpoints.callback, member, pts)
+
+    @app_commands.command(name="removepoints", description="(SC) Remove points from a member.")
+    async def slash_removepoints(self, inter, member: discord.Member, pts: int):
+        await self._run_ephemeral(inter, self.sm.removepoints.callback, member, pts)
+
+    @app_commands.command(name="award", description="(SC) Award / deduct points by reason key.")
+    async def slash_award(self, inter, member: discord.Member, reason: str):
+        await self._run_ephemeral(inter, self.sm.award.callback, member, reason)
+
+    @app_commands.command(name="awardreasons", description="Show valid award reason keys.")
+    async def slash_awardreasons(self, inter):
+        await self._run_ephemeral(inter, self.sm.awardreasons.callback)
+
+    @app_commands.command(name="leaderboard", description="Show the Support points leaderboard.")
+    async def slash_leaderboard(self, inter, top: int = 10):
+        await self._run(inter, self.sm.leaderboard.callback, top)
+
+    # ---- activity & monitoring ---------------------------
+    @app_commands.command(name="activitygraphsetup", description="Interactive 7-day activity graph.")
+    async def slash_activitygraphsetup(self, inter):
+        await self._run(inter, self.sm.activitygraphsetup.callback)
+
+    @app_commands.command(name="cupteam", description="Support members sorted by tenure in role.")
+    async def slash_cupteam(self, inter):
+        await self._run(inter, self.sm.cupteam.callback)
+
+    @app_commands.command(name="noactivity", description="Support members with 0 support msgs in 7 days.")
+    async def slash_noactivity(self, inter):
+        await self._run(inter, self.sm.noactivity.callback)
+
+    @app_commands.command(name="delta", description="Weekly delta (points & check-ins vs last week).")
+    async def slash_delta(self, inter):
+        await self._run(inter, self.sm.delta.callback)
+
+    @app_commands.command(name="summary", description="Weekly summary (top earners, check-ins).")
+    async def slash_summary(self, inter):
+        await self._run(inter, self.sm.summary.callback)
+
+    @app_commands.command(name="inactive", description="Support staff with no check-in in 7 days.")
+    async def slash_inactive(self, inter):
+        await self._run(inter, self.sm.inactive.callback)
+
+    # ---- goal system ------------------------------------
+    @app_commands.command(name="assigngoal", description="Assign a weekly goal to a member.")
+    async def slash_assigngoal(self, inter, member: discord.Member, *, goal: str):
+        await self._run(inter, self.sm.assigngoal.callback, member, goal=goal)
+
+    @app_commands.command(name="goalsummary", description="List all current goals.")
+    async def slash_goalsummary(self, inter):
+        await self._run_ephemeral(inter, self.sm.goalsummary.callback)
+
+    @app_commands.command(name="removegoal", description="Remove a member’s goal.")
+    async def slash_removegoal(self, inter, member: discord.Member):
+        await self._run(inter, self.sm.removegoal.callback, member)
+
+    @app_commands.command(name="completegoal", description="Mark a member’s goal as completed.")
+    async def slash_completegoal(self, inter, member: discord.Member):
+        await self._run(inter, self.sm.completegoal.callback, member)
+
+    # ---- support-channel registry ------------------------
+    @app_commands.command(name="addsupportchannel", description="Add a channel to Support registry.")
+    async def slash_addsc(self, inter, channel: discord.TextChannel):
+        await self._run(inter, self.sm.addsupportchannel.callback, channel)
+
+    @app_commands.command(name="removesupportchannel", description="Remove a channel from Support registry.")
+    async def slash_removesc(self, inter, channel: discord.TextChannel):
+        await self._run(inter, self.sm.removesupportchannel.callback, channel)
+
+    @app_commands.command(name="listsupportchannels", description="List registered Support channels.")
+    async def slash_listsc(self, inter):
+        await self._run_ephemeral(inter, self.sm.listsupportchannels.callback)
+
+    # ---- check-in workflow -------------------------------
+    @app_commands.command(name="opencheckins", description="Open the weekly check-in window.")
+    async def slash_opencheckins(self, inter):
+        await self._run(inter, self.sm.opencheckins.callback)
+
+    @app_commands.command(name="checkin", description="Submit your Support check-in.")
+    async def slash_checkin(self, inter):
+        await self._run_ephemeral(inter, self.sm.checkin.callback)
+
+    @app_commands.command(name="acceptcheckin", description="(SC) Approve & close a check-in channel.")
+    async def slash_accept(self, inter):
+        await self._run(inter, self.sm.accept.callback)
+
+    @app_commands.command(name="excuse", description="(SC) Excuse a member for this week’s check-in.")
+    async def slash_excuse(self, inter, member: discord.Member):
+        await self._run(inter, self.sm.excuse.callback, member)
+
+    @app_commands.command(name="closecheckins", description="Close check-ins and penalise absentees.")
+    async def slash_closecheckins(self, inter):
+        await self._run(inter, self.sm.closecheckins.callback)
+
+    @app_commands.command(name="pingteam", description="Ping staff who haven’t checked in this week.")
+    async def slash_pingteam(self, inter):
+        await self._run(inter, self.sm.pingteam.callback)
+
+    # ---- promotions / demotions --------------------------
+    @app_commands.command(name="promote", description="(SC) Promote a Support member.")
+    async def slash_promote(self, inter, member: discord.Member):
+        await self._run(inter, self.sm.promote.callback, member)
+
+    @app_commands.command(name="demote", description="(SC) Demote a Support member.")
+    async def slash_demote(self, inter, member: discord.Member):
+        await self._run(inter, self.sm.demote.callback, member)
+
+    # ---- PDF onboarding ----------------------------------
+    @app_commands.command(name="uploadpdf", description="(SC) Upload an onboarding PDF.")
+    async def slash_uploadpdf(self, inter, display_name: str, file: discord.Attachment):
+        # mimic the text-command’s “attachment on the message” expectation
+        ctx = _ctx_from_inter(inter)
+        ctx.message.attachments = [file]
+        await self._run(inter, self.sm.upload_pdf.callback, display_name)
+
+    @app_commands.command(name="listpdfs", description="List stored onboarding PDFs.")
+    async def slash_listpdfs(self, inter):
+        await self._run_ephemeral(inter, self.sm.list_pdfs.callback)
+
+    @app_commands.command(name="onboard", description="Send the onboarding package to a member.")
+    async def slash_onboard(self, inter, member: discord.Member):
+        await self._run(inter, self.sm.onboard.callback, member)
