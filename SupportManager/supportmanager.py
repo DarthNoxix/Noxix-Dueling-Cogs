@@ -930,8 +930,12 @@ class SupportManager(commands.Cog):
 # ────────────────────────────────────────────────────────────────
 
 
+# ────────────────────────────────────────────────────────────────
+#  ONE-FILE SLASH WRAPPERS
+# ────────────────────────────────────────────────────────────────
+
+# helper – convert an Interaction into a proper (awaited) Red Context
 async def _ctx_from_inter(inter: discord.Interaction) -> Context:
-    """Turn an Interaction into a *real*, awaited Red Context."""
     return await Context.from_interaction(inter)
 
 
@@ -940,163 +944,248 @@ class _SupportSlash(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.sm: SupportManager = bot.get_cog("SupportManager")  # must already be loaded
+        self.sm = bot.get_cog("SupportManager")        # must already be loaded
 
-    # ───────── Utility shortcuts ─────────
-    async def _run(self, inter: discord.Interaction, coro, *args, **kwargs):
-        await inter.response.defer(thinking=True)
-        ctx = await _ctx_from_inter(inter)
-        await coro(self.sm, ctx, *args, **kwargs)
-
-    async def _run_ephemeral(self, inter: discord.Interaction, coro, *args, **kwargs):
-        await inter.response.defer(thinking=True, ephemeral=True)
+    # ───────── generic runner ─────────
+    async def _run_any(
+        self,
+        inter: discord.Interaction,
+        private: bool,
+        coro,                      # original command .callback
+        *args,
+        **kwargs,
+    ):
+        await inter.response.defer(thinking=True, ephemeral=private)
         ctx = await _ctx_from_inter(inter)
         await coro(self.sm, ctx, *args, **kwargs)
 
     # ───────── points / awards / leaderboard ─────────
     @app_commands.command(name="points")
-    async def slash_points(self, inter, member: discord.Member | None = None):
-        await self._run_ephemeral(inter, self.sm.points.callback, member)
+    async def slash_points(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member | None = None,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.points.callback, member)
 
     @app_commands.command(name="addpoints")
-    async def slash_addpoints(self, inter, member: discord.Member, pts: int):
-        await self._run_ephemeral(inter, self.sm.addpoints.callback, member, pts)
+    async def slash_addpoints(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        pts: int,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.addpoints.callback, member, pts)
 
     @app_commands.command(name="removepoints")
-    async def slash_removepoints(self, inter, member: discord.Member, pts: int):
-        await self._run_ephemeral(inter, self.sm.removepoints.callback, member, pts)
+    async def slash_removepoints(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        pts: int,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.removepoints.callback, member, pts)
 
     @app_commands.command(
         name="award",
-        description="(SC) Award / deduct points; give one or more reason-keys separated by spaces."
+        description="(SC) Award / deduct points; provide one or more reason-keys separated by spaces.",
     )
     async def slash_award(
         self,
         inter: discord.Interaction,
         member: discord.Member,
-        reasons: str                       # <─ one text box, user types:  help link correction
+        reasons: str,
+        private: bool = False,
     ):
         reason_list = [r for r in reasons.split() if r]
-        # defer & pass through
-        await self._run_ephemeral(inter, self.sm.award.callback, member, *reason_list)
+        await self._run_any(inter, private, self.sm.award.callback, member, *reason_list)
 
     @app_commands.command(name="awardreasons")
-    async def slash_awardreasons(self, inter):
-        await self._run_ephemeral(inter, self.sm.awardreasons.callback)
+    async def slash_awardreasons(self, inter: discord.Interaction, private: bool = True):
+        await self._run_any(inter, private, self.sm.awardreasons.callback)
 
     @app_commands.command(name="leaderboard")
-    async def slash_leaderboard(self, inter, top: int = 10):
-        await self._run(inter, self.sm.leaderboard.callback, top)
+    async def slash_leaderboard(
+        self,
+        inter: discord.Interaction,
+        top: int = 10,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.leaderboard.callback, top)
 
     # ───────── activity & monitoring ─────────
+    @app_commands.command(name="activitygraphsetup")
+    async def slash_activitygraphsetup(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.activitygraphsetup.callback)
 
     @app_commands.command(name="cupteam")
-    async def slash_cupteam(self, inter):
-        await self._run(inter, self.sm.cupteam.callback)
+    async def slash_cupteam(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.cupteam.callback)
 
     @app_commands.command(name="noactivity")
-    async def slash_noactivity(self, inter):
-        await self._run(inter, self.sm.noactivity.callback)
+    async def slash_noactivity(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.noactivity.callback)
 
     @app_commands.command(name="delta")
-    async def slash_delta(self, inter):
-        await self._run(inter, self.sm.delta.callback)
+    async def slash_delta(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.delta.callback)
 
     @app_commands.command(name="summary")
-    async def slash_summary(self, inter):
-        await self._run(inter, self.sm.summary.callback)
+    async def slash_summary(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.summary.callback)
 
     @app_commands.command(name="inactive")
-    async def slash_inactive(self, inter):
-        await self._run(inter, self.sm.inactive.callback)
+    async def slash_inactive(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.inactive.callback)
 
     # ───────── goal system ─────────
     @app_commands.command(name="assigngoal")
-    async def slash_assigngoal(self, inter, member: discord.Member, *, goal: str):
-        await self._run(inter, self.sm.assigngoal.callback, member, goal=goal)
+    async def slash_assigngoal(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        goal: str,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.assigngoal.callback, member, goal=goal)
 
     @app_commands.command(name="goalsummary")
-    async def slash_goalsummary(self, inter):
-        await self._run_emeraleph(inter, self.sm.goalsummary.callback)
+    async def slash_goalsummary(self, inter: discord.Interaction, private: bool = True):
+        await self._run_any(inter, private, self.sm.goalsummary.callback)
 
     @app_commands.command(name="removegoal")
-    async def slash_removegoal(self, inter, member: discord.Member):
-        await self._run(inter, self.sm.removegoal.callback, member)
+    async def slash_removegoal(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.removegoal.callback, member)
 
     @app_commands.command(name="completegoal")
-    async def slash_completegoal(self, inter, member: discord.Member):
-        await self._run(inter, self.sm.completegoal.callback, member)
+    async def slash_completegoal(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.completegoal.callback, member)
 
     # ───────── support-channel registry ─────────
     @app_commands.command(name="addsupportchannel")
-    async def slash_addsupportchannel(self, inter, channel: discord.TextChannel):
-        await self._run(inter, self.sm.addsupportchannel.callback, channel)
+    async def slash_addsupportchannel(
+        self,
+        inter: discord.Interaction,
+        channel: discord.TextChannel,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.addsupportchannel.callback, channel)
 
     @app_commands.command(name="removesupportchannel")
-    async def slash_removesupportchannel(self, inter, channel: discord.TextChannel):
-        await self._run(inter, self.sm.removesupportchannel.callback, channel)
+    async def slash_removesupportchannel(
+        self,
+        inter: discord.Interaction,
+        channel: discord.TextChannel,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.removesupportchannel.callback, channel)
 
     @app_commands.command(name="listsupportchannels")
-    async def slash_listsupportchannels(self, inter):
-        await self._run_ephemeral(inter, self.sm.listsupportchannels.callback)
+    async def slash_listsupportchannels(self, inter: discord.Interaction, private: bool = True):
+        await self._run_any(inter, private, self.sm.listsupportchannels.callback)
 
     # ───────── check-in workflow ─────────
     @app_commands.command(name="opencheckins")
-    async def slash_opencheckins(self, inter):
-        await self._run(inter, self.sm.opencheckins.callback)
+    async def slash_opencheckins(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.opencheckins.callback)
 
     @app_commands.command(name="checkin")
-    async def slash_checkin(self, inter):
-        await self._run_ephemeral(inter, self.sm.checkin.callback)
+    async def slash_checkin(self, inter: discord.Interaction, private: bool = True):
+        await self._run_any(inter, private, self.sm.checkin.callback)
 
     @app_commands.command(name="acceptcheckin")
-    async def slash_acceptcheckin(self, inter):
-        await self._run(inter, self.sm.accept.callback)
+    async def slash_acceptcheckin(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.accept.callback)
 
     @app_commands.command(name="excuse")
-    async def slash_excuse(self, inter, member: discord.Member):
-        await self._run(inter, self.sm.excuse.callback, member)
+    async def slash_excuse(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.excuse.callback, member)
 
     @app_commands.command(name="closecheckins")
-    async def slash_closecheckins(self, inter):
-        await self._run(inter, self.sm.closecheckins.callback)
+    async def slash_closecheckins(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.closecheckins.callback)
 
     @app_commands.command(name="pingteam")
-    async def slash_pingteam(self, inter):
-        await self._run(inter, self.sm.pingteam.callback)
+    async def slash_pingteam(self, inter: discord.Interaction, private: bool = False):
+        await self._run_any(inter, private, self.sm.pingteam.callback)
 
     # ───────── promotions / demotions ─────────
     @app_commands.command(name="promote")
-    async def slash_promote(self, inter, member: discord.Member):
-        await self._run(inter, self.sm.promote.callback, member)
+    async def slash_promote(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.promote.callback, member)
 
     @app_commands.command(name="demote")
-    async def slash_demote(self, inter, member: discord.Member):
-        await self._run(inter, self.sm.demote.callback, member)
+    async def slash_demote(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.demote.callback, member)
 
     # ───────── PDF onboarding ─────────
     @app_commands.command(name="uploadpdf")
-    async def slash_uploadpdf(self, inter, display_name: str, file: discord.Attachment):
+    async def slash_uploadpdf(
+        self,
+        inter: discord.Interaction,
+        display_name: str,
+        file: discord.Attachment,
+        private: bool = False,
+    ):
         ctx = await _ctx_from_inter(inter)
-        ctx.message.attachments = [file]
-        await self._run(inter, self.sm.upload_pdf.callback, display_name)
+        ctx.message.attachments = [file]           # mimic prefix cmd behaviour
+        await self._run_any(inter, private, self.sm.upload_pdf.callback, display_name)
 
     @app_commands.command(name="listpdfs")
-    async def slash_listpdfs(self, inter):
-        await self._run_ephemeral(inter, self.sm.list_pdfs.callback)
+    async def slash_listpdfs(self, inter: discord.Interaction, private: bool = True):
+        await self._run_any(inter, private, self.sm.list_pdfs.callback)
 
     @app_commands.command(name="onboard")
-    async def slash_onboard(self, inter, member: discord.Member):
-        await self._run(inter, self.sm.onboard.callback, member)
+    async def slash_onboard(
+        self,
+        inter: discord.Interaction,
+        member: discord.Member,
+        private: bool = False,
+    ):
+        await self._run_any(inter, private, self.sm.onboard.callback, member)
 
-# ──────────────────────────────────────────────
+
+# public alias
 class SupportManagerSlash(_SupportSlash):
-    """Public alias so Red can add the cog."""
+    """Public alias so Alicent can `add_cog()` it."""
     pass
 
 
 # ──────────────────────────────────────────────
+#  Alicent entry-point – load BOTH cogs
+# ──────────────────────────────────────────────
 async def setup(bot):
-    sm = SupportManager(bot)          # prefix / hybrid
+    sm = SupportManager(bot)              # classic / prefix commands
     await bot.add_cog(sm)
+
+    # load the slash façade (needs SupportManager already registered)
     await bot.add_cog(SupportManagerSlash(bot))
+
