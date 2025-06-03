@@ -102,7 +102,7 @@ async def _member_daily_points(
 
     return [per_day[today - datetime.timedelta(days=i)] for i in reversed(range(days))]
 
-# 2) message counts (fast version) ----------------------------------------
+# ────────── fixed _member_daily_messages ──────────
 async def _member_daily_messages(
     guild: discord.Guild,
     support_channels: List[int],
@@ -110,27 +110,34 @@ async def _member_daily_messages(
     days: int = 7,
 ) -> Tuple[List[int], List[int]]:
     """
-    Return two series (support_msgs, other_msgs) for the last `days` days.
-    Only the latest 100 msgs / channel are scanned, with early-exit on 7-day cutoff.
+    Return two series (support_msgs, other_msgs) for the past `days` days.
+
+    • only the newest 100 messages per channel are fetched  
+    • stops scanning a channel as soon as it sees a msg older than the cutoff  
+    • channels are processed **one at a time** to avoid 429 global-ratelimit spam
     """
     today = datetime.datetime.utcnow().date()
-    cutoff_dt = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    cutoff_dt = discord.utils.utcnow() - datetime.timedelta(days=days)
 
-    sup_cnt, oth_cnt = Counter(), Counter()
+    sup_cnt: Counter[datetime.date] = Counter()
+    oth_cnt: Counter[datetime.date] = Counter()
 
     async def scan(ch: discord.TextChannel, is_support: bool):
         async for m in ch.history(limit=100, oldest_first=False):
-            if m.created_at < cutoff_dt:
+            if m.created_at < cutoff_dt:         # both aware ⇒ safe compare
                 break
             if m.author.id == member.id:
                 (sup_cnt if is_support else oth_cnt)[m.created_at.date()] += 1
 
-    await asyncio.gather(*[scan(ch, ch.id in support_channels) for ch in guild.text_channels])
+    # process channels sequentially (rate-limit friendly)
+    for ch in guild.text_channels:
+        await scan(ch, ch.id in support_channels)
 
-    def series(cnt: Counter) -> List[int]:
-        return [cnt[today - datetime.timedelta(days=i)] for i in reversed(range(days))]
+    def series(counter: Counter) -> List[int]:
+        return [counter[today - datetime.timedelta(days=i)] for i in reversed(range(days))]
 
     return series(sup_cnt), series(oth_cnt)
+
 
 # 3) PNG figure builder ----------------------------------------------------
 async def generate_activity_graph(
@@ -294,23 +301,6 @@ class SupportManager(commands.Cog):
             return rid
         role = discord.utils.get(guild.roles, name="Small Council")
         return role.id if role else None
-
-    @commands.command()
-    @is_small_council()
-    async def activitygraphsetup(self, ctx: commands.Context):
-        members = [m for m in ctx.guild.members if any(r.name in SUPPORT_ROLE_NAMES for r in m.roles)]
-        if not members:
-            return await ctx.send("⚠ No eligible members found with the specified roles.")
-
-        default = members[0]
-        file = await generate_activity_graph(ctx, default)
-
-        view = ActivityGraphView(ctx, members, default.id, file)
-        await ctx.send(
-            content=f"📊 Activity graph for {default.mention} (past 7 days)",
-            file=file,
-            view=view,
-        )
 
 
     # ---- Support-channel registry --------------------------
