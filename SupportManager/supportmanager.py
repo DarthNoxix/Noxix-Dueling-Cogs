@@ -302,6 +302,22 @@ class SupportManager(commands.Cog):
         role = discord.utils.get(guild.roles, name="Small Council")
         return role.id if role else None
 
+    @commands.command()
+    @is_small_council()
+    async def activitygraphsetup(self, ctx: commands.Context):
+        members = [m for m in ctx.guild.members if any(r.name in SUPPORT_ROLE_NAMES for r in m.roles)]
+        if not members:
+            return await ctx.send("⚠ No eligible members found with the specified roles.")
+
+        default = members[0]
+        file = await generate_activity_graph(ctx, default)
+
+        view = ActivityGraphView(ctx, members, default.id, file)
+        await ctx.send(
+            content=f"📊 Activity graph for {default.mention} (past 7 days)",
+            file=file,
+            view=view,
+        )
 
     # ---- Support-channel registry --------------------------
     @commands.command()
