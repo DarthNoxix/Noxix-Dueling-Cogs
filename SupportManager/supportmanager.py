@@ -15,7 +15,8 @@ import io
 from collections import defaultdict, Counter
 from pathlib import Path
 from typing import List, Optional
-
+from discord import app_commands
+from redbot.core.commands import Context
 import discord
 import matplotlib.pyplot as plt
 from redbot.core import checks, commands, Config, data_manager
@@ -1062,3 +1063,263 @@ class SupportManager(commands.Cog):
             await log.send(f"📉 {member.mention} demoted to **{roles[idx - 1].name}** by {ctx.author.mention}")
         await ctx.send(f"⬇️ Demoted {member.display_name}.")
 
+# ════════════════════════════════════════════════════════════════════════
+#  Slash-command wrappers
+# ════════════════════════════════════════════════════════════════════════
+
+def _ctx_from_interaction(inter: discord.Interaction) -> Context:
+    """
+    Helper – build a classic commands.Context from an Interaction so the
+    original text-command coroutine can be re-used unchanged.
+    """
+    return Context.from_interaction(inter)
+
+
+class SupportManagerSlash(commands.Cog):
+    """
+    Slash-command façade for *all* SupportManager text commands.
+    Keep this cog tiny: every slash cmd just defers once and then
+    calls the original callback on the main cog.
+    """
+
+    def __init__(self, bot: commands.Bot, sm_cog: SupportManager):
+        self.bot = bot
+        self.sm = sm_cog
+
+    # ─── Small-Council utilities ────────────────────────────────────────
+    @app_commands.command(name="activitygraphsetup",
+                          description="Create an interactive 7-day activity graph for Support staff.")
+    async def sc_activitygraphsetup(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=False)
+        await self.sm.activitygraphsetup(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="addsupportchannel",
+                          description="Add a channel to the Support-channel registry.")
+    async def sc_addsupportchannel(self, inter: discord.Interaction,
+                                   channel: discord.TextChannel):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.addsupportchannel.callback(self.sm, ctx, channel)   # reuse text cmd
+
+    @app_commands.command(name="removesupportchannel",
+                          description="Remove a channel from the Support-channel registry.")
+    async def sc_removesupportchannel(self, inter: discord.Interaction,
+                                      channel: discord.TextChannel):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.removesupportchannel.callback(self.sm, ctx, channel)
+
+    @app_commands.command(name="listsupportchannels",
+                          description="List registered Support channels.")
+    async def sc_listsupportchannels(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await self.sm.listsupportchannels(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="cupteam",
+                          description="Show Support members sorted by tenure in current role.")
+    async def sc_cupteam(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True)
+        await self.sm.cupteam(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="noactivity",
+                          description="List Support staff with zero messages in Support channels for 7 days.")
+    async def sc_noactivity(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True)
+        await self.sm.noactivity(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="delta",
+                          description="Weekly delta: points & check-ins vs last week.")
+    async def sc_delta(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True)
+        await self.sm.delta(await _ctx_from_interaction(inter))
+
+    # ─── Goal system ────────────────────────────────────────────────────
+    @app_commands.command(name="assigngoal",
+                          description="Assign a weekly goal to a Support member.")
+    async def sc_assigngoal(self, inter: discord.Interaction,
+                            member: discord.Member, goal: str):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.assigngoal.callback(self.sm, ctx, member, goal=goal)
+
+    @app_commands.command(name="goalsummary",
+                          description="Show all currently assigned goals.")
+    async def sc_goalsummary(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await self.sm.goalsummary(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="removegoal",
+                          description="Remove a goal from a Support member.")
+    async def sc_removegoal(self, inter: discord.Interaction,
+                            member: discord.Member):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.removegoal.callback(self.sm, ctx, member)
+
+    @app_commands.command(name="completegoal",
+                          description="Mark a member’s goal as completed.")
+    async def sc_completegoal(self, inter: discord.Interaction,
+                              member: discord.Member):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.completegoal.callback(self.sm, ctx, member)
+
+    # ─── Weekly check-ins ───────────────────────────────────────────────
+    @app_commands.command(name="opencheckins",
+                          description="Open the weekly check-in window.")
+    async def sc_opencheckins(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True)
+        await self.sm.opencheckins(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="checkin",
+                          description="Submit your Support check-in answers.")
+    async def staff_checkin(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await self.sm.checkin(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="acceptcheckin",
+                          description="(SC) Approve and close a check-in channel.")
+    async def sc_accept(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True)
+        await self.sm.accept(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="excuse",
+                          description="(SC) Excuse a member from this week’s check-in.")
+    async def sc_excuse(self, inter: discord.Interaction,
+                        member: discord.Member):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.excuse.callback(self.sm, ctx, member)
+
+    @app_commands.command(name="closecheckins",
+                          description="Close check-ins and auto-penalise absentees.")
+    async def sc_closecheckins(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True)
+        await self.sm.closecheckins(await _ctx_from_interaction(inter))
+
+    # ─── Points & awards ────────────────────────────────────────────────
+    @app_commands.command(name="points",
+                          description="Show your (or another member’s) Support points.")
+    async def points(self, inter: discord.Interaction,
+                     member: Optional[discord.Member] = None):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.points.callback(self.sm, ctx, member)
+
+    @app_commands.command(name="addpoints",
+                          description="(SC) Add points to a member.")
+    async def sc_addpoints(self, inter: discord.Interaction,
+                           member: discord.Member, pts: int):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.addpoints.callback(self.sm, ctx, member, pts)
+
+    @app_commands.command(name="removepoints",
+                          description="(SC) Remove points from a member.")
+    async def sc_removepoints(self, inter: discord.Interaction,
+                              member: discord.Member, pts: int):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.removepoints.callback(self.sm, ctx, member, pts)
+
+    @app_commands.command(name="award",
+                          description="(SC) Award / deduct points by reason key(s).")
+    async def sc_award(self, inter: discord.Interaction,
+                       member: discord.Member, reasons: str):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.award.callback(self.sm, ctx, member, *reasons.split())
+
+    @app_commands.command(name="awardreasons",
+                          description="List all valid award reason keys.")
+    async def awardreasons(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await self.sm.awardreasons(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="leaderboard",
+                          description="Show the Support points leaderboard.")
+    async def leaderboard(self, inter: discord.Interaction, top: int = 10):
+        await inter.response.defer(thinking=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.leaderboard.callback(self.sm, ctx, top)
+
+    # ─── Promotions / demotions ─────────────────────────────────────────
+    @app_commands.command(name="promote",
+                          description="(SC) Promote a Support member to the next rank.")
+    async def sc_promote(self, inter: discord.Interaction,
+                         member: discord.Member):
+        await inter.response.defer(thinking=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.promote.callback(self.sm, ctx, member)
+
+    @app_commands.command(name="demote",
+                          description="(SC) Demote a Support member down one rank.")
+    async def sc_demote(self, inter: discord.Interaction,
+                        member: discord.Member):
+        await inter.response.defer(thinking=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.demote.callback(self.sm, ctx, member)
+
+    # ─── PDFs & onboarding ──────────────────────────────────────────────
+    @app_commands.command(name="uploadpdf",
+                          description="(SC) Upload a PDF onboarding guide.")
+    async def sc_uploadpdf(self, inter: discord.Interaction,
+                           display_name: str, file: discord.Attachment):
+        await inter.response.defer(ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        # monkey-patch the interaction attachment into ctx.message
+        ctx.message.attachments = [file]
+        await self.sm.upload_pdf.callback(self.sm, ctx, display_name)
+
+    @app_commands.command(name="listpdfs",
+                          description="List stored onboarding PDFs.")
+    async def listpdfs(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await self.sm.list_pdfs(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="onboard",
+                          description="Send the onboarding package to a new Support member.")
+    async def sc_onboard(self, inter: discord.Interaction,
+                         member: discord.Member):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        ctx = await _ctx_from_interaction(inter)
+        await self.sm.onboard.callback(self.sm, ctx, member)
+
+    # ─── Weekly summary / inactivity ───────────────────────────────────
+    @app_commands.command(name="summary",
+                          description="(SC) Weekly points & check-in summary.")
+    async def sc_summary(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await self.sm.summary(await _ctx_from_interaction(inter))
+
+    @app_commands.command(name="inactive",
+                          description="(SC) List Support staff with no check-in in 7 days.")
+    async def sc_inactive(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True, ephemeral=True)
+        await self.sm.inactive(await _ctx_from_interaction(inter))
+
+    # ─── Ping team helper ──────────────────────────────────────────────
+    @app_commands.command(name="pingteam",
+                          description="Ping Support staff who still need to check in this week.")
+    async def sc_pingteam(self, inter: discord.Interaction):
+        await inter.response.defer(thinking=True)
+        await self.sm.pingteam(await _ctx_from_interaction(inter))
+
+    # ─── Owner-only supportset group intentionally NOT mirrored
+    #      (owners can keep using text cmds or create their own).
+    # ───────────────────────────────────────────────────────────────────
+
+
+async def setup(bot: commands.Bot):
+    """
+    Red standard entry-point – loads SupportManager (if not already) and then
+    the slash-command façade.
+    """
+    # 1. make sure the main cog is loaded first
+    sm_cog = bot.get_cog("SupportManager")
+    if sm_cog is None:
+        sm_cog = SupportManager(bot)
+        await bot.add_cog(sm_cog)
+
+    # 2. add the slash-command wrappers
+    await bot.add_cog(SupportManagerSlash(bot, sm_cog))
