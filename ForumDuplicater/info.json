@@ -1,0 +1,13 @@
+{
+  "name": "ForumDuplicator",
+  "short": "Duplicate forum channels",
+  "description": "Clone a forum channel plus all its threads and messages (attachments ≤ 8 MiB).",
+  "author": ["Geri"],
+  "install_msg": "ForumDuplicator loaded. Use [p]duplicateforum to clone forums.",
+  "requirements": [],
+  "required_cogs": {},
+  "tags": ["utility", "forums", "backup"],
+  "type": "COG",
+  "hidden": false,
+  "end_user_data_statement": "This cog does not store any persistent user data."
+}
