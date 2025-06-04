@@ -44,30 +44,40 @@ class ForumDuplicator(commands.Cog):
     async def _create_dest_forum(
         self, guild: discord.Guild, source: discord.ForumChannel, new_name: str
     ) -> discord.ForumChannel:
-        """Create a new forum channel mirroring `source`."""
-        # Re-build permission overwrites
-        overwrites: Dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {
-            target: overwrite for target, overwrite in source.overwrites.items()
-        }
+        """Create a forum channel mirroring *source* on any library flavour."""
+        overwrites = dict(source.overwrites)
 
-        # Clone tags → list[dict] accepted by create_forum_channel
-        tags_payload: List[dict] = [
-            {"name": t.name, "emoji": t.emoji} for t in source.available_tags
-        ]
-
-        dest = await guild.create_forum_channel(
+        # Common kwargs every variant accepts
+        base = dict(
             name=new_name,
             topic=source.topic,
             category=source.category,
             overwrites=overwrites,
             slowmode_delay=source.slowmode_delay,
             nsfw=source.nsfw,
-            default_auto_archive_duration=source.default_auto_archive_duration,
-            default_thread_slowmode_delay=source.default_thread_slowmode_delay,
-            available_tags=tags_payload,
             reason=f"Duplicated from {source.name} by ForumDuplicator",
         )
-        return dest
+
+        tags_payload = [{"name": t.name, "emoji": t.emoji} for t in source.available_tags]
+
+        # ───── Official discord-py ≥ 2.2 ─────
+        if hasattr(guild, "create_forum_channel"):
+            return await guild.create_forum_channel(
+                **base,
+                default_auto_archive_duration=source.default_auto_archive_duration,
+                default_thread_slowmode_delay=source.default_thread_slowmode_delay,
+                available_tags=tags_payload,
+            )
+
+        # ───── Pycord / Nextcord legacy helper ─────
+        if hasattr(guild, "create_forum"):
+            # Older forks ignore auto-archive + per-thread slowmode kwargs
+            return await guild.create_forum(**base, available_tags=tags_payload)
+
+        # ───── Very old libraries (<2.0) – last-resort hack ─────
+        base["type"] = discord.ChannelType.forum
+        return await guild.create_text_channel(**base)
+
 
     async def _match_tags(
         self, dest_forum: discord.ForumChannel, source_tags: List[discord.ForumTag]
