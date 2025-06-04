@@ -15,8 +15,8 @@ import discord
 from redbot.core import checks, commands
 
 
-MAX_LEN = 2000        # Discord hard limit
-SAFE_SLICE = 1900     # give ourselves some head-room
+MAX_LEN = 2000       # Discord absolute limit
+SAFE_SLICE = 1900    # wiggle-room for safety
 
 
 class ForumDuplicator(commands.Cog):
@@ -43,18 +43,17 @@ class ForumDuplicator(commands.Cog):
         )
         tags_payload = [{"name": t.name, "emoji": t.emoji} for t in source.available_tags]
 
-        if hasattr(guild, "create_forum_channel"):                                    # discord.py ≥ 2.2
+        if hasattr(guild, "create_forum_channel"):     # discord.py ≥ 2.2
             return await guild.create_forum_channel(
                 **base,
                 default_auto_archive_duration=source.default_auto_archive_duration,
                 default_thread_slowmode_delay=source.default_thread_slowmode_delay,
                 available_tags=tags_payload,
             )
-
-        if hasattr(guild, "create_forum"):                                            # Pycord/Nextcord legacy
+        if hasattr(guild, "create_forum"):             # Pycord / Nextcord
             return await guild.create_forum(**base, available_tags=tags_payload)
 
-        base["type"] = discord.ChannelType.forum                                      # fallback
+        base["type"] = discord.ChannelType.forum       # fallback
         return await guild.create_text_channel(**base)
 
     async def _match_tags(
@@ -66,7 +65,7 @@ class ForumDuplicator(commands.Cog):
     async def _copy_attachments(self, atts: List[discord.Attachment]) -> List[discord.File]:
         files = []
         for a in atts:
-            if a.size > 8 * 1024 * 1024:     # skip > 8 MiB
+            if a.size > 8 * 1024 * 1024:       # skip > 8 MiB
                 continue
             files.append(discord.File(io.BytesIO(await a.read(use_cached=True)), filename=a.filename))
         return files
@@ -77,10 +76,12 @@ class ForumDuplicator(commands.Cog):
         text: str,
         files: Optional[List[discord.File]] = None,
     ):
-        """Split *text* into ≤ 2000-char blocks and send.  Attachments only on first chunk."""
+        """Split *text* into safe chunks and send.  Attachments only on first chunk."""
         chunks = [text[i:i + SAFE_SLICE] for i in range(0, len(text), SAFE_SLICE)] or [""]
         first = True
         for chunk in chunks:
+            if not chunk.strip() and not (files if first else None):
+                chunk = "-"                       # prevent “empty message” error
             await thread.send(
                 content=chunk,
                 files=files if first else None,
@@ -102,7 +103,7 @@ class ForumDuplicator(commands.Cog):
                 if after_first:
                     continue
 
-            content = m.content or ""                 # no “[no text]”
+            content = m.content or ""                   # no prefix / placeholder
             files = await self._copy_attachments(m.attachments)
             await self._send_long_message(dst_thread, content, files)
 
@@ -126,6 +127,7 @@ class ForumDuplicator(commands.Cog):
     ):
         """Clone an entire forum channel."""
         await ctx.typing()
+
         if not isinstance(source_forum, discord.ForumChannel):
             await ctx.send("❌ The source channel must be a **forum** channel.")
             return
@@ -140,10 +142,10 @@ class ForumDuplicator(commands.Cog):
             first = await self._get_first_message(th)
 
             if first:
-                first_text  = first.content or ""                    # no prefix, no placeholder
+                first_text  = first.content or "-"          # ensure non-empty
                 first_files = await self._copy_attachments(first.attachments)
             else:
-                first_text, first_files = " ", None                 # content required by API
+                first_text, first_files = "-", None
 
             tags = await self._match_tags(dest_forum, th.applied_tags)
             tmp = await dest_forum.create_thread(
@@ -155,7 +157,7 @@ class ForumDuplicator(commands.Cog):
                 files=first_files,
             )
 
-            # Pycord/Nextcord returns ThreadWithMessage
+            # Pycord/Nextcord returns ThreadWithMessage; unwrap.
             dst_thread = tmp.thread if not hasattr(tmp, "send") and hasattr(tmp, "thread") else tmp
 
             await self._copy_messages(th, dst_thread, after_first=True)
