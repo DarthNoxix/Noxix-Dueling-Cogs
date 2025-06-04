@@ -190,11 +190,19 @@ class ForumDuplicator(commands.Cog):
     @commands.is_owner()
     @commands.command()
     async def guildattrs(self, ctx):
-        """DM every public attribute on ctx.guild (chunk-safe)."""
+        """
+        DM every *public* attribute on ctx.guild.
+        Handles Discord’s 2 000-char limit cleanly.
+        """
+        # Collect all public attrs
         attrs = sorted(a for a in dir(ctx.guild) if not a.startswith("_"))
-        # Join with spaces so it’s shorter than one-per-line
-        raw = " ".join(attrs)
-        for chunk in discord.utils.as_chunks(raw, 1900):      # ≤2000 hard limit
-            await ctx.author.send("```py\n" + chunk + "\n```")
+        raw   = " ".join(attrs)                    # one long space-separated string
+
+        # Split into ≤ 1 900-char slices (room for code-block markup)
+        chunks = [raw[i : i + 1900] for i in range(0, len(raw), 1900)]
+
+        for chunk in chunks:
+            await ctx.author.send(f"```py\n{chunk}\n```")
+
 
        
