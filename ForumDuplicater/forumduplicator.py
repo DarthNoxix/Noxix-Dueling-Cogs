@@ -190,8 +190,11 @@ class ForumDuplicator(commands.Cog):
     @commands.is_owner()
     @commands.command()
     async def guildattrs(self, ctx):
-        """DMs you all public attrs on ctx.guild."""
-        attrs = "\n".join(sorted(a for a in dir(ctx.guild) if not a.startswith("_")))
-        for chunk in discord.utils.as_chunks(attrs.splitlines(), 1900):
-            await ctx.author.send("```\n" + "\n".join(chunk) + "\n```")
+        """DM every public attribute on ctx.guild (chunk-safe)."""
+        attrs = sorted(a for a in dir(ctx.guild) if not a.startswith("_"))
+        # Join with spaces so it’s shorter than one-per-line
+        raw = " ".join(attrs)
+        for chunk in discord.utils.as_chunks(raw, 1900):      # ≤2000 hard limit
+            await ctx.author.send("```py\n" + chunk + "\n```")
+
        
