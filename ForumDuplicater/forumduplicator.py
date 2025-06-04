@@ -186,3 +186,12 @@ class ForumDuplicator(commands.Cog):
         await ctx.send(
             f"✅ **Done!** Cloned forum channel to {dest_forum.mention} with all threads/messages."
         )
+
+    @commands.is_owner()
+    @commands.command()
+    async def guildattrs(self, ctx):
+        """DMs you all public attrs on ctx.guild."""
+        attrs = "\n".join(sorted(a for a in dir(ctx.guild) if not a.startswith("_")))
+        for chunk in discord.utils.as_chunks(attrs.splitlines(), 1900):
+            await ctx.author.send("```\n" + "\n".join(chunk) + "\n```")
+       
