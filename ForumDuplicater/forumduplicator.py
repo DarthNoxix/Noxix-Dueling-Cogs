@@ -337,10 +337,27 @@ class ForumDuplicator(commands.Cog):
     async def force_sync_forums(
         self,
         ctx: commands.Context,
-        source_forum: discord.ForumChannel,
-        dest_forum: discord.ForumChannel,
+        source_forum_id: str,
+        dest_forum_id: str,
     ):
-        """Manually register a sync link between forums (if `duplicateforumto` wasn't used)."""
+        """Manually register a sync link using raw channel IDs (across servers)."""
+        try:
+            source_forum = self.bot.get_channel(int(source_forum_id)) or await self.bot.fetch_channel(int(source_forum_id))
+            dest_forum = self.bot.get_channel(int(dest_forum_id)) or await self.bot.fetch_channel(int(dest_forum_id))
+        except discord.NotFound:
+            await ctx.send("❌ One or both channels could not be found.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ Missing permissions to fetch one or both channels.")
+            return
+        except Exception as e:
+            await ctx.send(f"❌ Error fetching channels: {e}")
+            return
+
+        if not isinstance(source_forum, discord.ForumChannel) or not isinstance(dest_forum, discord.ForumChannel):
+            await ctx.send("❌ One or both IDs do not refer to valid **forum** channels.")
+            return
+
         thread_map = {}
         msg_map = {}
 
@@ -364,6 +381,7 @@ class ForumDuplicator(commands.Cog):
             f"✅ Manual sync link established between {source_forum.mention} and {dest_forum.mention}.\n"
             "Now edits will sync properly."
         )
+
 
     ############################################################
     # Listener – propagate edits                               #
