@@ -191,7 +191,7 @@ class ForumDuplicator(commands.Cog):
                 first_text  = first.content or "-"
                 first_files = await self._copy_attachments(first.attachments)
             else:
-                first_text, first_files = "-", None
+                first_text, first_files = "-", []
 
             tags = await self._match_tags(dest_forum, th.applied_tags)
             tmp = await dest_forum.create_thread(
@@ -254,7 +254,7 @@ class ForumDuplicator(commands.Cog):
                 first_text  = first.content or "-"
                 first_files = await self._copy_attachments(first.attachments)
             else:
-                first_text, first_files = "-", None
+                first_text, first_files = "-", []
 
             tags = await self._match_tags(dest_forum, th.applied_tags)
             tmp = await dest_forum.create_thread(
