@@ -329,6 +329,41 @@ class ForumDuplicator(commands.Cog):
             f"will now update its mirror in {dest_forum.mention}."
         )
 
+
+        @commands.command(name="forcesyncforums", aliases=["manualsyncforums"])
+        @commands.is_owner()
+        async def force_sync_forums(
+            self,
+            ctx: commands.Context,
+            source_forum: discord.ForumChannel,
+            dest_forum: discord.ForumChannel,
+        ):
+            """Manually register a sync link between forums (if `duplicateforumto` wasn't used)."""
+            thread_map = {}
+            msg_map = {}
+
+            for src_thread in source_forum.threads:
+                dst_thread = discord.utils.get(dest_forum.threads, name=src_thread.name)
+                if dst_thread:
+                    thread_map[src_thread.id] = dst_thread.id
+                    async for src_msg, dst_msg in zip(
+                        src_thread.history(oldest_first=True, limit=None),
+                        dst_thread.history(oldest_first=True, limit=None),
+                    ):
+                        msg_map[src_msg.id] = dst_msg.id
+
+            self._links[source_forum.id] = {
+                "dest_forum_id": dest_forum.id,
+                "thread_map": thread_map,
+                "msg_map": msg_map,
+            }
+
+            await ctx.send(
+                f"✅ Manual sync link established between {source_forum.mention} and {dest_forum.mention}.\n"
+                "Now edits will sync properly."
+            )
+
+
     ############################################################
     # Listener – propagate edits                               #
     ############################################################
