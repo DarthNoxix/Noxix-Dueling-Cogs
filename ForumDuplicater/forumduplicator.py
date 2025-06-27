@@ -214,33 +214,39 @@ class ForumDuplicator(commands.Cog):
     ############################################################
     # Command – cross‑guild clone                              #
     ############################################################
-    @commands.guild_only()
-    @checks.admin_or_permissions(manage_channels=True)
-    @commands.command(
-        name="duplicateforumto",
-        aliases=["cloneforumto", "copyforumto"],
-    )
+    @commands.command(name="duplicateforumto", aliases=["cloneforumto", "copyforumto"])
     async def duplicate_forum_to(
         self,
         ctx: commands.Context,
         source_forum: discord.ForumChannel,
-        dest_category: discord.CategoryChannel,
+        dest_category_id: str,
         *,
         new_name: Optional[str] = None,
     ):
-        """Clone *source_forum* into **dest_category** (which may live in another guild)."""
+        """Clone *source_forum* into a category (using ID) in another server."""
         await ctx.typing()
 
-        # Create destination forum (possibly on another guild)
+        try:
+            dest_category_obj = self.bot.get_channel(int(dest_category_id))
+            if not isinstance(dest_category_obj, discord.CategoryChannel):
+                await ctx.send("❌ That ID does not point to a category.")
+                return
+        except Exception:
+            await ctx.send("❌ Invalid category ID.")
+            return
+
         dest_forum = await self._create_dest_forum(
-            dest_category.guild,
+            dest_category_obj.guild,
             source_forum,
-            dest_category,
+            dest_category_obj,
             new_name or source_forum.name,
         )
+
         await ctx.send(
-            f"📑 Created forum **{dest_forum.name}** in {dest_category.guild.name} – copying threads…"
+            f"📑 Created forum **{dest_forum.name}** in {dest_category_obj.guild.name} – copying threads…"
         )
+
+
 
         # Prepare link‑state holders
         thread_map: Dict[int, int] = {}
