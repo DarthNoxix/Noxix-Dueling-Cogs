@@ -383,6 +383,53 @@ class ForumDuplicator(commands.Cog):
             "Now edits will sync properly."
         )
 
+    ############################################################
+    # Command –full force sync                                 #
+    ############################################################
+    @commands.command(name="fullsyncforums")
+    @commands.is_owner()
+    async def full_sync_forums(
+        self,
+        ctx: commands.Context,
+        source_forum_id: str,
+        dest_forum_id: str,
+    ):
+        """Fully sync a forum (new messages, edits, deletes) using channel IDs."""
+        try:
+            source_forum = self.bot.get_channel(int(source_forum_id)) or await self.bot.fetch_channel(int(source_forum_id))
+            dest_forum = self.bot.get_channel(int(dest_forum_id)) or await self.bot.fetch_channel(int(dest_forum_id))
+        except Exception as e:
+            await ctx.send(f"❌ Channel fetch error: {e}")
+            return
+
+        if not isinstance(source_forum, discord.ForumChannel) or not isinstance(dest_forum, discord.ForumChannel):
+            await ctx.send("❌ Invalid forum channel(s).")
+            return
+
+        thread_map = {}
+        msg_map = {}
+
+        for src_thread in source_forum.threads:
+            dst_thread = discord.utils.get(dest_forum.threads, name=src_thread.name)
+            if dst_thread:
+                thread_map[src_thread.id] = dst_thread.id
+                src_msgs = [m async for m in src_thread.history(oldest_first=True, limit=None)]
+                dst_msgs = [m async for m in dst_thread.history(oldest_first=True, limit=None)]
+
+                for src_msg, dst_msg in zip(src_msgs, dst_msgs):
+                    msg_map[src_msg.id] = dst_msg.id
+
+        self._links[source_forum.id] = {
+            "dest_forum_id": dest_forum.id,
+            "thread_map": thread_map,
+            "msg_map": msg_map,
+            "full_sync": True  # flag to enable full syncing
+        }
+
+        await ctx.send(
+            f"✅ Full sync enabled between {source_forum.mention} and {dest_forum.mention}.\n"
+            "New messages, edits, and deletions will now mirror across."
+        )
 
 
     ############################################################
@@ -424,6 +471,56 @@ class ForumDuplicator(commands.Cog):
         # Raw payload may or may not include content – fetch full after edit
         src_msg = await src_channel.fetch_message(payload.message_id)
         await dest_msg.edit(content=src_msg.content or "-", allowed_mentions=discord.AllowedMentions.none())
+
+    ############################################################
+    # Listener – propagate new messages                        #
+    ############################################################
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.guild is None or message.author.bot or not isinstance(message.channel, discord.Thread):
+            return
+        parent_id = message.channel.parent_id
+        link = self._links.get(parent_id)
+        if not link or not link.get("full_sync"):
+            return
+
+        dest_thread_id = link["thread_map"].get(message.channel.id)
+        if not dest_thread_id:
+            return
+
+        dest_thread = self.bot.get_channel(dest_thread_id)
+        if not dest_thread:
+            return
+
+        files = [discord.File(io.BytesIO(await a.read()), filename=a.filename)
+                for a in message.attachments if a.size <= 8 * 1024 * 1024]
+        mirror = await dest_thread.send(content=message.content or "-", files=files)
+        link["msg_map"][message.id] = mirror.id
+
+    ############################################################
+    # Listener – propagate deletions                           #
+    ############################################################
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        parent_id = self.bot.get_channel(payload.channel_id).parent_id
+        link = self._links.get(parent_id)
+        if not link or not link.get("full_sync"):
+            return
+
+        dest_msg_id = link["msg_map"].get(payload.message_id)
+        if not dest_msg_id:
+            return
+
+        dest_thread_id = link["thread_map"].get(payload.channel_id)
+        if not dest_thread_id:
+            return
+
+        dest_thread = self.bot.get_channel(dest_thread_id)
+        try:
+            dest_msg = await dest_thread.fetch_message(dest_msg_id)
+            await dest_msg.delete()
+        except Exception:
+            pass
 
     ############################################################
     # Utility – inspect guild attrs (owner only)               #
