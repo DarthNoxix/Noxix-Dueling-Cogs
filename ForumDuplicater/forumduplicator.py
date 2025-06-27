@@ -329,7 +329,8 @@ class ForumDuplicator(commands.Cog):
             f"will now update its mirror in {dest_forum.mention}."
         )
 
-
+        @commands.guild_only()
+        @checks.admin_or_permissions(manage_channels=True)
         @commands.command(name="forcesyncforums", aliases=["manualsyncforums"])
         @commands.is_owner()
         async def force_sync_forums(
