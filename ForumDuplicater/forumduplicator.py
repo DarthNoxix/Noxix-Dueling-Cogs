@@ -304,10 +304,20 @@ class ForumDuplicator(commands.Cog):
     async def sync_forums(
         self,
         ctx: commands.Context,
-        source_forum: discord.ForumChannel,
-        dest_forum:   discord.ForumChannel,
+        source_forum_id: str,
+        dest_forum_id: str,
     ):
-        """Enable **one‑way** edit propagation from *source_forum* → *dest_forum*."""
+        """Enable **one‑way** edit propagation from *source_forum* → *dest_forum* (by ID)."""
+        try:
+            source_forum = self.bot.get_channel(int(source_forum_id))
+            dest_forum = self.bot.get_channel(int(dest_forum_id))
+            if not isinstance(source_forum, discord.ForumChannel) or not isinstance(dest_forum, discord.ForumChannel):
+                await ctx.send("❌ One or both IDs do not refer to valid forum channels.")
+                return
+        except Exception:
+            await ctx.send("❌ Could not resolve one or both forum channel IDs.")
+            return
+
         link = self._links.get(source_forum.id)
 
         if not link or link["dest_forum_id"] != dest_forum.id:
