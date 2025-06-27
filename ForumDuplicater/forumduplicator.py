@@ -365,10 +365,11 @@ class ForumDuplicator(commands.Cog):
             dst_thread = discord.utils.get(dest_forum.threads, name=src_thread.name)
             if dst_thread:
                 thread_map[src_thread.id] = dst_thread.id
-                async for src_msg, dst_msg in zip(
-                    src_thread.history(oldest_first=True, limit=None),
-                    dst_thread.history(oldest_first=True, limit=None),
-                ):
+
+                src_msgs = [msg async for msg in src_thread.history(oldest_first=True, limit=None)]
+                dst_msgs = [msg async for msg in dst_thread.history(oldest_first=True, limit=None)]
+
+                for src_msg, dst_msg in zip(src_msgs, dst_msgs):
                     msg_map[src_msg.id] = dst_msg.id
 
         self._links[source_forum.id] = {
@@ -381,6 +382,7 @@ class ForumDuplicator(commands.Cog):
             f"✅ Manual sync link established between {source_forum.mention} and {dest_forum.mention}.\n"
             "Now edits will sync properly."
         )
+
 
 
     ############################################################
