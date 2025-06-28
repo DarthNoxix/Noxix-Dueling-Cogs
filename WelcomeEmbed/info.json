@@ -1,0 +1,8 @@
+{
+  "author": "You",
+  "description": "Configurable join-welcome embed",
+  "install_msg": "",
+  "end_user_data_statement": "Stores per-guild welcome settings.",
+  "name": "WelcomeEmbed",
+  "requirements": []
+}
