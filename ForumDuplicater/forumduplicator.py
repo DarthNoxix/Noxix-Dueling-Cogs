@@ -341,11 +341,14 @@ class ForumDuplicator(commands.Cog):
         source_forum_id: str,
         dest_forum_id: str,
     ):
-        """Enable **one‑way** edit propagation from *source_forum* → *dest_forum* (by ID)."""
+        """Enable **one-way** edit propagation from *source_forum* → *dest_forum* (by ID)."""
         try:
             source_forum = self.bot.get_channel(int(source_forum_id))
-            dest_forum = self.bot.get_channel(int(dest_forum_id))
-            if not isinstance(source_forum, discord.ForumChannel) or not isinstance(dest_forum, discord.ForumChannel):
+            dest_forum   = self.bot.get_channel(int(dest_forum_id))
+            if (
+                not isinstance(source_forum, discord.ForumChannel)
+                or not isinstance(dest_forum, discord.ForumChannel)
+            ):
                 await ctx.send("❌ One or both IDs do not refer to valid forum channels.")
                 return
         except Exception:
@@ -353,15 +356,18 @@ class ForumDuplicator(commands.Cog):
             return
 
         link = self._links.get(source_forum.id)
-
         if not link or link["dest_forum_id"] != dest_forum.id:
             await ctx.send("❌ No duplication link found. Please run `duplicateforumto` first.")
             return
 
         await ctx.send(
-            f"🔗 Edit‑sync **enabled** – any message edits in {source_forum.mention} "
+            f"🔗 Edit-sync **enabled** – any message edits in {source_forum.mention} "
             f"will now update its mirror in {dest_forum.mention}."
         )
+
+        # ── persist to disk so the link survives restarts ──
+        await self._save_links()
+
 
     ############################################################
     # Command – force sync                                     #
@@ -429,13 +435,19 @@ class ForumDuplicator(commands.Cog):
         source_forum_id: str,
         dest_forum_id: str,
     ):
+        
         """Mirror **everything**: missing threads, new messages, edits, deletes."""
         # ── resolve forums ─────────────────────────────────────
+
         try:
             source_forum = self.bot.get_channel(int(source_forum_id)) or await self.bot.fetch_channel(int(source_forum_id))
             dest_forum   = self.bot.get_channel(int(dest_forum_id))   or await self.bot.fetch_channel(int(dest_forum_id))
         except Exception as e:
             await ctx.send(f"❌ Channel fetch error: {e}")
+            return
+        
+        if source_forum.id in self._links and self._links[source_forum.id].get("full_sync"):
+            await ctx.send("⚠️ This forum is already fully synced.")
             return
 
         if not isinstance(source_forum, discord.ForumChannel) or not isinstance(dest_forum, discord.ForumChannel):
@@ -609,6 +621,25 @@ class ForumDuplicator(commands.Cog):
 
         await self._save_links()
         await ctx.send("🛑 Sync disabled and link removed.")
+
+    ############################################################
+    # Command –  show syncs                                    #
+    ############################################################
+    @commands.command(name="showsyncs", aliases=["listsyncs"])
+    @commands.is_owner()
+    async def show_syncs(self, ctx):
+        """Show all active forum sync links (owner-only)."""
+        if not self._links:
+            await ctx.send("ℹ️ No active sync links.")
+            return
+
+        desc = ""
+        for src_id, info in self._links.items():
+            dest_id = info["dest_forum_id"]
+            full = "✅" if info.get("full_sync") else "✏️"
+            desc += f"{full} `{src_id}` → `{dest_id}`\n"
+
+        await ctx.send(f"**Current forum syncs:**\n{desc}")
 
 
     ############################################################
