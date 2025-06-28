@@ -1,0 +1,10 @@
+{
+  "author": "your-name-here",
+  "name": "EmbedCopier",
+  "description": "Copy any message’s embeds (and attachments) to another channel.",
+  "install_msg": "Use [p]copyembed <link|id> [#channel] to clone embeds.",
+  "short": "Embed copier",
+  "requirements": [],
+  "tags": ["embeds", "utility", "copy", "clone"],
+  "type": "COG"
+}
