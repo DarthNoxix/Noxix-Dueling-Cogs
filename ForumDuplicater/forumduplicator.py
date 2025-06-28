@@ -19,7 +19,8 @@ Commands
 Only message *edits* propagate – messages that were never edited remain untouched.
 Edits to messages longer than 1 900 chars update only the **first** mirrored chunk.
 """
-
+import json
+from pathlib import Path
 import asyncio
 import io
 from typing import Dict, List, Optional
@@ -52,10 +53,43 @@ class ForumDuplicator(commands.Cog):
         #       "msg_map"      : {src_msg_id   : dest_msg_id}
         #   }
         self._links: Dict[int, Dict] = {}
+        bot.loop.create_task(self._load_links())
 
     ############################################################
     # Helpers                                                   #
     ############################################################
+        # ──────────────────────────────────────────────────────────
+    # Persistence helpers
+    #   • links are written to `<data_path>/forum_links.json`
+    #   • automatically loaded on cog start
+    # ──────────────────────────────────────────────────────────
+    def _data_path(self) -> Path:
+        return Path(str(self.bot._config_global_path)) / "ForumDuplicator"
+
+    def _links_file(self) -> Path:
+        p = self._data_path()
+        p.mkdir(parents=True, exist_ok=True)
+        return p / "forum_links.json"
+
+    async def _load_links(self):
+        try:
+            self._links.clear()
+            with self._links_file().open("r", encoding="utf8") as fp:
+                raw = json.load(fp)
+                # cast JSON keys back to int
+                self._links.update({int(k): v for k, v in raw.items()})
+        except FileNotFoundError:
+            pass  # first run
+        except Exception as e:
+            print("[ForumDuplicator] Could not load links:", e)
+
+    async def _save_links(self):
+        try:
+            with self._links_file().open("w", encoding="utf8") as fp:
+                json.dump(self._links, fp, indent=2)
+        except Exception as e:
+            print("[ForumDuplicator] Could not save links:", e)
+
     async def _create_dest_forum(
         self,
         dest_guild: discord.Guild,
@@ -289,7 +323,7 @@ class ForumDuplicator(commands.Cog):
             "thread_map"   : thread_map,
             "msg_map"      : msg_map,
         }
-
+        await self._save_links()
         await ctx.send(
             f"✅ **Done!** Forum duplicated → {dest_forum.mention}\n"
             "Run `[p]syncforums {source_forum.mention} {dest_forum.mention}` if you need live edit sync."
@@ -382,6 +416,7 @@ class ForumDuplicator(commands.Cog):
             f"✅ Manual sync link established between {source_forum.mention} and {dest_forum.mention}.\n"
             "Now edits will sync properly."
         )
+        await self._save_links()
 
     ############################################################
     # Command – full sync (retro + live)                       #
@@ -466,6 +501,7 @@ class ForumDuplicator(commands.Cog):
             f"✅ Retro-sync complete. **Live full sync** is now active between "
             f"{source_forum.mention} and {dest_forum.mention}."
         )
+        await self._save_links()
 
 
 
@@ -558,6 +594,22 @@ class ForumDuplicator(commands.Cog):
             await dest_msg.delete()
         except Exception:
             pass
+
+    ############################################################
+    # Command – disable / remove sync                          #
+    ############################################################
+    @commands.command(name="unsyncforums", aliases=["disablesyncforums", "stopsyncforums"])
+    @commands.is_owner()
+    async def unsync_forums(self, ctx: commands.Context, source_forum_id: str):
+        """Stop mirroring for a source forum and delete its link."""
+        link = self._links.pop(int(source_forum_id), None)
+        if not link:
+            await ctx.send("❌ No active sync link found for that forum.")
+            return
+
+        await self._save_links()
+        await ctx.send("🛑 Sync disabled and link removed.")
+
 
     ############################################################
     # Utility – inspect guild attrs (owner only)               #
