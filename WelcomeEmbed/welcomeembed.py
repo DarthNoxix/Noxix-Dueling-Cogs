@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import discord
-from redbot.core import commands, Config, checks  
+from redbot.core import commands, Config, checks
 from typing import Optional
 
-ACCENT = 0xE74C3C
+ACCENT = 0xE74C3C            # default embed colour
 
 
 class WelcomeEmbed(commands.Cog):
-    """Greets new members with a fancy embed you can edit from Discord."""
+    """
+    Sends a fancy embed when someone joins **and**
+    lets admins tweak the message / images with simple commands.
+    """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
