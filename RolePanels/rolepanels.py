@@ -11,7 +11,7 @@ from redbot.core import commands, Config, checks
 ACCENT = 0xE74C3C           # default embed colour
 DROPDOWN_LIMIT = 25         # Discord hard-limit per select
 BUTTON_ROW_LIMIT = 5        # #buttons shown in one row
-
+CONFIRM = True 
 
 # ╭──────────────────────────────────────────────────────────────╮
 # │                       MAIN COG                               │
@@ -325,16 +325,26 @@ class RoleSelect(discord.ui.Select):
         super().__init__(min_values=0, max_values=1, **kwargs)
 
     async def callback(self, inter: discord.Interaction):
-        chosen = int(self.values[0]) if self.values else None
-        role_ids = [int(o.value) for o in self.options]
+        # 1) ACK immediately so the user never sees “interaction failed”
+        await inter.response.defer(ephemeral=True)
 
-        to_remove = [inter.guild.get_role(r) for r in role_ids if r != chosen]
-        to_add = inter.guild.get_role(chosen) if chosen else None
+        chosen_id   = int(self.values[0]) if self.values else None
+        option_ids  = {int(o.value) for o in self.options}
+
+        # build the *new* role set entirely client-side
+        current = set(inter.user.roles)
+        current -= {r for r in current if r.id in option_ids}   # drop any previous pick
+        if chosen_id:
+            role = inter.guild.get_role(chosen_id)
+            if role:
+                current.add(role)
 
         try:
-            await inter.user.remove_roles(*filter(None, to_remove), reason="RolePanels dropdown")
-            if to_add:
-                await inter.user.add_roles(to_add, reason="RolePanels dropdown")
-            await inter.response.send_message("✅ Updated!", ephemeral=True, delete_after=5)
+            # single API request instead of remove ➜ add
+            await inter.user.edit(roles=list(current), reason="RolePanels dropdown")
+            if CONFIRM:
+                await inter.followup.send("✅ Updated!", ephemeral=True, delete_after=4)
         except discord.Forbidden:
-            await inter.response.send_message("Missing permissions.", ephemeral=True)
+            if CONFIRM:
+                await inter.followup.send("⚠️ Missing permissions.", ephemeral=True, delete_after=6)
+
