@@ -384,7 +384,7 @@ class ForumDuplicator(commands.Cog):
         )
 
     ############################################################
-    # Command –full force sync                                 #
+    # Command – full sync (retro + live)                       #
     ############################################################
     @commands.command(name="fullsyncforums")
     @commands.is_owner()
@@ -394,10 +394,11 @@ class ForumDuplicator(commands.Cog):
         source_forum_id: str,
         dest_forum_id: str,
     ):
-        """Fully sync a forum (new messages, edits, deletes) using channel IDs."""
+        """Mirror **everything**: missing threads, new messages, edits, deletes."""
+        # ── resolve forums ─────────────────────────────────────
         try:
             source_forum = self.bot.get_channel(int(source_forum_id)) or await self.bot.fetch_channel(int(source_forum_id))
-            dest_forum = self.bot.get_channel(int(dest_forum_id)) or await self.bot.fetch_channel(int(dest_forum_id))
+            dest_forum   = self.bot.get_channel(int(dest_forum_id))   or await self.bot.fetch_channel(int(dest_forum_id))
         except Exception as e:
             await ctx.send(f"❌ Channel fetch error: {e}")
             return
@@ -406,30 +407,66 @@ class ForumDuplicator(commands.Cog):
             await ctx.send("❌ Invalid forum channel(s).")
             return
 
-        thread_map = {}
-        msg_map = {}
+        await ctx.send("🔄 Scanning threads… this might take a moment.")
+        thread_map: Dict[int, int] = {}
+        msg_map:    Dict[int, int] = {}
 
+        # ── walk every thread in the source forum ─────────────
         for src_thread in source_forum.threads:
+            # try to find a matching thread by name in dest
             dst_thread = discord.utils.get(dest_forum.threads, name=src_thread.name)
-            if dst_thread:
-                thread_map[src_thread.id] = dst_thread.id
+
+            # If not present → create + copy
+            if dst_thread is None:
+                first = await self._get_first_message(src_thread)
+                if first:
+                    first_text  = first.content or "-"
+                    first_files = await self._copy_attachments(first.attachments)
+                else:
+                    first_text, first_files = "-", []
+
+                tags = await self._match_tags(dest_forum, src_thread.applied_tags)
+                tmp = await dest_forum.create_thread(
+                    name=src_thread.name,
+                    content=first_text,
+                    applied_tags=tags,
+                    slowmode_delay=src_thread.slowmode_delay,
+                    reason="Retro-sync thread",
+                    files=first_files,
+                )
+                dst_thread = tmp.thread if not hasattr(tmp, "send") and hasattr(tmp, "thread") else tmp
+
+                # copy remaining messages
+                await self._copy_messages(src_thread, dst_thread, msg_map, after_first=True)
+
+                # map first message if we had one
+                if first:
+                    sent_first = [m async for m in dst_thread.history(oldest_first=True, limit=1)]
+                    if sent_first:
+                        msg_map[first.id] = sent_first[0].id
+
+            else:
+                # thread already exists; map existing messages
                 src_msgs = [m async for m in src_thread.history(oldest_first=True, limit=None)]
                 dst_msgs = [m async for m in dst_thread.history(oldest_first=True, limit=None)]
+                for s, d in zip(src_msgs, dst_msgs):
+                    msg_map[s.id] = d.id
 
-                for src_msg, dst_msg in zip(src_msgs, dst_msgs):
-                    msg_map[src_msg.id] = dst_msg.id
+            thread_map[src_thread.id] = dst_thread.id
 
+        # ── persist link (enable live sync) ───────────────────
         self._links[source_forum.id] = {
             "dest_forum_id": dest_forum.id,
-            "thread_map": thread_map,
-            "msg_map": msg_map,
-            "full_sync": True  # flag to enable full syncing
+            "thread_map"   : thread_map,
+            "msg_map"      : msg_map,
+            "full_sync"    : True,
         }
 
         await ctx.send(
-            f"✅ Full sync enabled between {source_forum.mention} and {dest_forum.mention}.\n"
-            "New messages, edits, and deletions will now mirror across."
+            f"✅ Retro-sync complete. **Live full sync** is now active between "
+            f"{source_forum.mention} and {dest_forum.mention}."
         )
+
 
 
     ############################################################
@@ -534,3 +571,43 @@ class ForumDuplicator(commands.Cog):
         chunks = [raw[i : i + SAFE_SLICE] for i in range(0, len(raw), SAFE_SLICE)]
         for chunk in chunks:
             await ctx.author.send(f"```py\n{chunk}\n```")
+
+
+    ############################################################
+    # Listener – propagate brand-new threads                   #
+    ############################################################
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread: discord.Thread):
+        """Mirror new threads opened in a linked (full-sync) source forum."""
+        if not isinstance(thread.parent, discord.ForumChannel):
+            return
+
+        link = self._links.get(thread.parent.id)
+        if not link or not link.get("full_sync"):
+            return
+
+        dest_forum = self.bot.get_channel(link["dest_forum_id"])
+        if not isinstance(dest_forum, discord.ForumChannel):
+            return
+
+        first = await self._get_first_message(thread)
+        first_text  = first.content or "-" if first else "-"
+        first_files = await self._copy_attachments(first.attachments) if first else []
+
+        tags = await self._match_tags(dest_forum, thread.applied_tags)
+        tmp = await dest_forum.create_thread(
+            name=thread.name,
+            content=first_text,
+            applied_tags=tags,
+            slowmode_delay=thread.slowmode_delay,
+            reason="Live mirror of new thread",
+            files=first_files,
+        )
+        dest_thread = tmp.thread if not hasattr(tmp, "send") and hasattr(tmp, "thread") else tmp
+
+        # map new thread + its first message
+        link["thread_map"][thread.id] = dest_thread.id
+        if first:
+            sent = [m async for m in dest_thread.history(oldest_first=True, limit=1)]
+            if sent:
+                link["msg_map"][first.id] = sent[0].id
