@@ -238,6 +238,20 @@ class RolePanels(commands.Cog):
             return await ctx.send("ℹ️ No panels yet.")
         await ctx.send("📋 **Panels:** " + ", ".join(f"`{k}`" for k in keys))
 
+    # ── panel delete  <panel> ───────────────────────────────
+    @panel.command(name="delete", aliases=["del", "remove"])
+    async def panel_delete(self, ctx, name: str):
+        """Delete a stored panel (doesn't remove the message)."""
+        cfg = self.config.guild(ctx.guild)
+        panels = await cfg.panels()
+
+        if name not in panels:
+            return await ctx.send("❌ No such panel.")
+        
+        del panels[name]
+        await cfg.panels.set(panels)
+        await ctx.send(f"🗑️ Panel `{name}` deleted.")
+
     # ╭──────────────────────── private helpers ───────────────╮
     async def _parse_line(self, ctx, line: str) -> Optional[dict]:
         """Parse 'emoji | label | role' into dict or None."""
