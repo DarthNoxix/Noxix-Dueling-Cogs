@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import discord
-from discord.ext import commands
-from redbot.core import Config, checks, commands as redcommands
+from redbot.core import commands, Config, checks  
 from typing import Optional
 
-ACCENT = 0xE74C3C  # same red you used before
+ACCENT = 0xE74C3C
 
 
 class WelcomeEmbed(commands.Cog):
