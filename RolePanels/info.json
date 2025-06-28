@@ -1,0 +1,13 @@
+{
+  "name": "RolePanels",
+  "short": "Makes Role Panels",
+  "description": "Creates Role Panels for users to choose roles.",
+  "author": ["Geri"],
+  "install_msg": "RolePanels loaded.",
+  "requirements": [],
+  "required_cogs": {},
+  "tags": ["utility", "roles", "modal"],
+  "type": "COG",
+  "hidden": false,
+  "end_user_data_statement": "This cog does not store any persistent user data."
+}
