@@ -1,141 +1,248 @@
+# rolepanels.py
+# MIT-like – do whatever, just keep this header ;-)
+
 from __future__ import annotations
-import discord, asyncio, json, io, textwrap
+
+import asyncio
+import discord
+import json
+import io
+from typing import Dict, List, Optional
+
 from redbot.core import commands, Config, checks
 from redbot.core.utils.chat_formatting import escape
 
-ACCENT = 0xE74C3C          # default embed colour
+ACCENT = 0xE74C3C        # default embed colour
 
+
+# ╭──────────────────────────────────────────────────────────────╮
+# │                     MAIN COG                                │
+# ╰──────────────────────────────────────────────────────────────╯
 class RolePanels(commands.Cog):
     """Self-assign roles with sexy dropdowns & buttons."""
 
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=12345678, force_registration=True)
         self.config.register_guild(panels={})        # {panel_name: {data}}
         bot.add_listener(self.on_interaction, "on_interaction")
 
-    # ──────────────────────────────────────────────────────────
-    # panels helper: fetch & save
-    # ──────────────────────────────────────────────────────────
-    async def _get(self, guild, name):           # returns dict or None
+    # ── helpers ──────────────────────────────────────────────
+    async def get_panel(self, guild: discord.Guild, name: str) -> Optional[dict]:
+        """Fetch a panel dict or None."""
         return (await self.config.guild(guild).panels()).get(name)
 
-    async def _save(self, guild, name, data):
+    async def save_panel(self, guild: discord.Guild, name: str, data: dict):
         cfg = self.config.guild(guild)
         panels = await cfg.panels()
         panels[name] = data
         await cfg.panels.set(panels)
 
-    # ──────────────────────────────────────────────────────────
-    # command group
-    # ──────────────────────────────────────────────────────────
-    @commands.group(name="panel")
-    @checks.admin_or_permissions(manage_guild=True)
+    async def add_item_to_panel(self, guild: discord.Guild, panel: str, entry: dict):
+        """Append a single row/option and auto-save."""
+        data = await self.get_panel(guild, panel)
+        if not data:
+            raise KeyError("panel not found")
+        data["rows"].append(entry)
+        await self.save_panel(guild, panel, data)
+
+    async def add_many_to_panel(self, guild: discord.Guild, panel: str, new_entries: list[dict]):
+        """Bulk append several entries then rebuild the live message (if any)."""
+        data = await self.get_panel(guild, panel)
+        if not data:
+            raise KeyError("panel not found")
+        data["rows"].extend(new_entries)
+        await self.save_panel(guild, panel, data)
+
+        # if already published → edit the message
+        if data.get("message_id") and data.get("channel_id"):
+            channel = guild.get_channel(data["channel_id"])
+            if channel:
+                try:
+                    msg = await channel.fetch_message(data["message_id"])
+                    view = self._build_view(guild, panel, data)
+                    await msg.edit(view=view)
+                except Exception:
+                    pass   # swallow – nothing fatal
+
+    # ╭─────────────────────────────────────────────────────────╮
+    # │                     COMMAND GROUP                       │
+    # ╰─────────────────────────────────────────────────────────╯
+    @commands.group(name="panel", invoke_without_command=True)
+    @checks.admin_or_permissions(manage_roles=True)
     async def panel(self, ctx):
         """Create & manage role panels."""
-        if not ctx.invoked_subcommand:
-            await ctx.send_help()
+        await ctx.send_help()
 
-    # panel new
+    # ── panel new ────────────────────────────────────────────
     @panel.command(name="new")
     async def panel_new(self, ctx, name: str, *, title: str, colour: discord.Colour | None = None):
-        """Start a new draft panel."""
-        data = dict(title=title, colour=(colour or discord.Colour(ACCENT)).value,
-                    rows=[], message_id=None, channel_id=None)
-        await self._save(ctx.guild, name, data)
-        await ctx.send(f"✅ Draft **{name}** created.")
-
-    # panel add  <panel>  select|button  "label"  <role_id>  [emoji]
-    @panel.command(name="add")
-    async def panel_add(self, ctx, panel: str, kind: str,
-                        label: str, role_id: int, emoji: commands.PartialEmojiConverter = None):
-        """Add a select (dropdown) or button row."""
-        data = await self._get(ctx.guild, panel)
-        if not data:
-            return await ctx.send("❌ No such draft panel.")
-
-        entry = dict(kind=kind.lower(), label=label, role=role_id, emoji=str(emoji) if emoji else None)
-        if kind.lower() not in ("button", "select"):
-            return await ctx.send("Kind must be **button** or **select**.")
-
-        # add row or create new select with first option
-        if kind.lower() == "button":
-            data["rows"].append(entry)
-        else:
-            data["rows"].append(dict(kind="select", placeholder=label,
-                                     options=[entry], custom_id=f"sel_{discord.utils.time_snowflake()}"))
-        await self._save(ctx.guild, panel, data)
-        await ctx.send("➕ Added.")
-
-    # panel choice  <panel>  <label>  <role_id>  [emoji]
-    @panel.command(name="choice")
-    async def panel_choice(self, ctx, panel: str, label: str,
-                           role_id: int, emoji: commands.PartialEmojiConverter = None):
-        """Add an option to the *last* select you created."""
-        data = await self._get(ctx.guild, panel)
-        if not data:
-            return await ctx.send("❌ No such draft panel.")
-
-        selects = [r for r in data["rows"] if r["kind"] == "select"]
-        if not selects:
-            return await ctx.send("You haven’t added a select yet.")
-
-        selects[-1]["options"].append(
-            dict(kind="select", label=label, role=role_id, emoji=str(emoji) if emoji else None)
+        """Start a new **draft** panel."""
+        data = dict(
+            title=title,
+            colour=(colour or discord.Colour(ACCENT)).value,
+            rows=[],                # list of button/select dicts
+            message_id=None,
+            channel_id=None,
         )
-        await self._save(ctx.guild, panel, data)
-        await ctx.send("➕ Choice added.")
+        await self.save_panel(ctx.guild, name, data)
+        await ctx.send(f"✅ Draft **{name}** created – now add items!")
 
-    # panel publish  <panel>  #channel
+    # ── panel add  <panel>  <emoji>|<label>|<@role> ──────────
+    @panel.command(name="add")
+    async def panel_add(
+        self,
+        ctx,
+        panel: str,
+        *,
+        line: str
+    ):
+        """
+       Quick one-liner add.
+
+        Format:  `<emoji> | <label> | <role>`  
+        Example: `🐺 | House Stark | @Stark`
+        """
+        try:
+            emoji, label, role_raw = [p.strip() for p in line.split("|", maxsplit=2)]
+            role_id = int(role_raw.strip("<@&>"))
+            role = ctx.guild.get_role(role_id)
+            if not role:
+                raise ValueError
+        except Exception:
+            return await ctx.send("❌ Format: `emoji | label | role` (mention or ID).")
+
+        entry = dict(kind="button", label=label, role=role_id, emoji=emoji)
+        try:
+            await self.add_item_to_panel(ctx.guild, panel, entry)
+        except KeyError:
+            return await ctx.send("❌ No such draft panel.")
+
+        await ctx.tick()
+
+    # ── panel extend  (wizard) ───────────────────────────────
+    @panel.command(name="extend", aliases=["x"])
+    @commands.mod_or_permissions(manage_roles=True)
+    async def panel_extend(self, ctx, panel: str):
+        """DM wizard – paste many `emoji | label | role` lines, then **done**."""
+        data = await self.get_panel(ctx.guild, panel)
+        if not data:
+            return await ctx.send("❌ No panel named that.")
+
+        # open DM
+        try:
+            dm = await ctx.author.create_dm()
+        except discord.Forbidden:
+            return await ctx.send("❌ I can’t DM you – enable DMs.")
+
+        await dm.send(
+            f"🪄 **Extending panel `{panel}`.**\n"
+            "Paste `emoji | label | role` (one per message).  Type **done** to finish."
+        )
+
+        new_entries: list[dict] = []
+
+        def check(m): return m.author == ctx.author and m.channel == dm
+
+        while True:
+            try:
+                msg = await self.bot.wait_for("message", check=check, timeout=600)
+            except asyncio.TimeoutError:
+                await dm.send("⏰ Timeout – wizard cancelled.")
+                return
+
+            line = msg.content.strip()
+            if line.lower() == "done":
+                break
+
+            try:
+                emoji, label, role_raw = [p.strip() for p in line.split("|", maxsplit=2)]
+                role_id = int(role_raw.strip("<@&>"))
+                role = ctx.guild.get_role(role_id)
+                if not role:
+                    raise ValueError
+            except Exception:
+                await dm.send("⚠️  Wrong format. Try again.")
+                continue
+
+            new_entries.append(dict(kind="button", label=label, role=role_id, emoji=emoji))
+            await dm.send(f"✅ Queued **{label}**.")
+
+        if not new_entries:
+            return await dm.send("Nothing added – wizard closed.")
+
+        await self.add_many_to_panel(ctx.guild, panel, new_entries)
+        await dm.send("🎉 Panel updated!")
+        await ctx.tick()
+
+    # ── panel publish  <panel>  #channel ─────────────────────
     @panel.command(name="publish")
     async def panel_publish(self, ctx, panel: str, channel: discord.TextChannel):
-        """Send the panel embed + components to the chosen channel."""
-        data = await self._get(ctx.guild, panel)
+        """Send the panel embed + components to a channel."""
+        data = await self.get_panel(ctx.guild, panel)
         if not data:
             return await ctx.send("❌ No such panel.")
 
         embed = discord.Embed(title=data["title"], colour=data["colour"])
-        view  = self._build_view(ctx.guild, panel, data)
+        view = self._build_view(ctx.guild, panel, data)
 
         msg = await channel.send(embed=embed, view=view)
         data.update(message_id=msg.id, channel_id=channel.id)
-        await self._save(ctx.guild, panel, data)
+        await self.save_panel(ctx.guild, panel, data)
         await ctx.send(f"🚀 Published in {channel.mention}.")
 
-    # ──────────────────────────────────────────────────────────
-    # COMPONENT builder
-    # ──────────────────────────────────────────────────────────
+    # ── panel shows ──────────────────────────────────────────
+    @panel.command(name="list")
+    async def panel_list(self, ctx):
+        """List all stored panel drafts & live messages."""
+        panels = (await self.config.guild(ctx.guild).panels()).keys()
+        if not panels:
+            return await ctx.send("ℹ️ No panels yet.")
+        await ctx.send("📋 **Panels:**\n" + ", ".join(f"`{p}`" for p in panels))
+
+    # ╭─────────────────────────────────────────────────────────╮
+    # │                VIEW / COMPONENT BUILDER                │
+    # ╰─────────────────────────────────────────────────────────╯
     def _build_view(self, guild: discord.Guild, panel_name: str, data: dict):
         view = discord.ui.View(timeout=None)
         for row in data["rows"]:
+            style = discord.ButtonStyle.secondary
             if row["kind"] == "button":
-                style = discord.ButtonStyle.success if row["emoji"] else discord.ButtonStyle.secondary
-                view.add_item(RoleButton(label=row["label"], role=row["role"],
-                                         emoji=row.get("emoji"), style=style))
-            else:   # select
-                opts = []
-                for opt in row["options"]:
-                    opts.append(discord.SelectOption(label=opt["label"], value=str(opt["role"]),
-                                                     emoji=opt.get("emoji")))
-                view.add_item(RoleSelect(placeholder=row["placeholder"],
-                                         custom_id=row["custom_id"], options=opts))
+                style = discord.ButtonStyle.success if row.get("emoji") else discord.ButtonStyle.secondary
+                view.add_item(
+                    RoleButton(
+                        label=row["label"],
+                        role=row["role"],
+                        emoji=row.get("emoji"),
+                        style=style,
+                    )
+                )
+            else:  # select not used in quick-add but kept for completeness
+                opts = [
+                    discord.SelectOption(label=o["label"], value=str(o["role"]), emoji=o.get("emoji"))
+                    for o in row["options"]
+                ]
+                view.add_item(
+                    RoleSelect(
+                        placeholder=row.get("placeholder", "Choose…"),
+                        custom_id=row.get("custom_id", f"sel_{panel_name}"),
+                        options=opts,
+                    )
+                )
         return view
 
-    # ──────────────────────────────────────────────────────────
-    # LISTENER
-    # ──────────────────────────────────────────────────────────
+    # ╭─────────────────────────────────────────────────────────╮
+    # │                     LISTENER                            │
+    # ╰─────────────────────────────────────────────────────────╯
     async def on_interaction(self, inter: discord.Interaction):
-        if not inter.guild or not inter.data:
+        if inter.type is discord.InteractionType.component:
+            # components handle themselves – nothing here
             return
-        if inter.type is not discord.InteractionType.component:
-            return
-
-        # handled inside the component classes, nothing here
 
 
-# ──────────────────────────────────────────────────────────
-#  COMPONENT CLASSES
-# ──────────────────────────────────────────────────────────
+# ╭──────────────────────────────────────────────────────────────╮
+# │               COMPONENT CLASSES                             │
+# ╰──────────────────────────────────────────────────────────────╯
 class RoleButton(discord.ui.Button):
     def __init__(self, **kwargs):
         self.role_id = kwargs.pop("role")
@@ -157,18 +264,18 @@ class RoleButton(discord.ui.Button):
         except discord.Forbidden:
             await inter.response.send_message("I’m missing permissions.", ephemeral=True)
 
+
 class RoleSelect(discord.ui.Select):
     def __init__(self, **kwargs):
         super().__init__(min_values=0, max_values=1, **kwargs)
 
     async def callback(self, inter: discord.Interaction):
-        # value will be role ID as str
         role_id = int(self.values[0]) if self.values else None
-        roles = [int(o.value) for o in self.options]
+        role_ids = [int(o.value) for o in self.options]
 
-        # remove any already-held role from this menu
-        to_remove = [inter.guild.get_role(r) for r in roles if r != role_id]
-        to_add    = inter.guild.get_role(role_id) if role_id else None
+        # remove any held role that belongs to this menu
+        to_remove = [inter.guild.get_role(r) for r in role_ids if r != role_id]
+        to_add = inter.guild.get_role(role_id) if role_id else None
 
         try:
             await inter.user.remove_roles(*filter(None, to_remove), reason="RolePanels select")
