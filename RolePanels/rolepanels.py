@@ -35,6 +35,27 @@ class RolePanels(commands.Cog):
         panels[name] = data
         await cfg.panels.set(panels)
 
+
+    # ── inside RolePanels ----------------------------------------------------------
+
+    async def cog_load(self):
+        """Run when the cog is (re)loaded – re-attach persistent views."""
+        self.bot.loop.create_task(self._register_persistent_views())
+
+    async def _register_persistent_views(self):
+        await self.bot.wait_until_ready()                # make sure guild cache is ready
+
+        for guild in self.bot.guilds:
+            panels = await self.config.guild(guild).panels()
+            for name, data in panels.items():
+                if not data.get("message_id"):           # unpublished draft – skip
+                    continue
+
+                view = self._build_view(guild, name, data)
+                # tie the view to the original message so interactions are routed correctly
+                self.bot.add_view(view, message_id=data["message_id"])
+
+
     # append ONE entry (handles style automatically)
     async def add_entry(self, guild: discord.Guild, panel: str, entry: dict):
         data = await self.get_panel(guild, panel)
