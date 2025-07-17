@@ -1,0 +1,13 @@
+{
+  "name": "OpenWebUIChat",
+  "short": "Chat with an Open-WebUI LLM",
+  "description": "Slash & prefix command that proxies user prompts to an Open-WebUI /chat/completions endpoint and returns the assistant reply.",
+  "author": ["Geri"],
+  "install_msg": "Loaded OpenWebUIChat – use /chat or [p]chat to talk to your model.",
+  "tags": ["ai", "llm", "chat", "openwebui"],
+  "requirements": ["httpx>=0.25"],
+  "required_cogs": {},
+  "type": "COG",
+  "hidden": false,
+  "end_user_data_statement": "Stores no personal data."
+}
