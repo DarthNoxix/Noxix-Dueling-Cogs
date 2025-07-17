@@ -68,8 +68,10 @@ class OpenWebUIMemoryBot(commands.Cog):
         if not base or not key:
             raise RuntimeError("OpenWebUI URL / key not set.")
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        # Adjust the base to point to the Ollama proxy
+        ollama_base = base.replace('/api', '/ollama')
         async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(f"{base.rstrip('/')}/ollama/api/embed",
+            r = await c.post(f"{ollama_base.rstrip('/')}/api/embed",
                             headers=headers,
                             json={"model": embed_model, "input": [text]})
             r.raise_for_status()
