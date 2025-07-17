@@ -1,5 +1,3 @@
-# openwebuichat.py
-# MIT License
 import asyncio
 import contextlib
 import logging
@@ -12,7 +10,7 @@ from redbot.core import commands, Config
 
 log = logging.getLogger("red.OpenWebUIChat")
 
-MAX_DISCORD = 1990  # leave a little head-room
+MAX_DISCORD = 1990
 
 
 class OpenWebUIChat(commands.Cog):
