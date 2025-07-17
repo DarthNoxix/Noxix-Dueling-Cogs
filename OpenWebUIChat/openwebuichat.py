@@ -65,13 +65,15 @@ class OpenWebUIMemoryBot(commands.Cog):
 
     async def _api_embed(self, text: str) -> List[float]:
         base, key, _, embed_model = await self._get_keys()
+        if not base or not key:
+            raise RuntimeError("OpenWebUI URL / key not set.")
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(f"{base.rstrip('/')}/embeddings",
-                             headers=headers,
-                             json={"model": embed_model, "input": text})
+            r = await c.post(f"{base.rstrip('/')}/ollama/api/embed",
+                            headers=headers,
+                            json={"model": embed_model, "input": [text]})
             r.raise_for_status()
-            return r.json()["data"][0]["embedding"]
+            return r.json()["embeddings"][0]
 
     # ───────────────── memory utils ──────────────
     @staticmethod
