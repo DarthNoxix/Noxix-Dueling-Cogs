@@ -1,160 +1,156 @@
 import asyncio
 import contextlib
 import logging
-import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import discord
 import httpx
 from redbot.core import Config, commands
 
 log = logging.getLogger("red.OpenWebUIChat")
 
-MAX_DISCORD = 1990
-FALLBACK_MSG = "I do not know that information, please ask a member of the team."
-MAX_MEMORIES_IN_PROMPT = 50        # cap to keep prompts sane
-SIGNIF = re.compile(r"\b[a-z0-9]{4,}\b")  # significant words (≥4 chars)
+MAX_MSG = 1900
+FALLBACK = "I do not know that information, please ask a member of the team."
+SIM_THRESHOLD = 0.80        # cosine similarity gate (0-1)
+TOP_K = 5                   # max memories sent to the LLM
 
 
-class OpenWebUIChat(commands.Cog):
-    """LLM wiki-bot that only answers from its stored memories."""
+class OpenWebUIMemoryBot(commands.Cog):
+    """LLM wiki-bot: answers only when a stored memory is relevant."""
 
-    # ─────────────────── init / config ───────────────────
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._queue: "asyncio.Queue[Tuple[commands.Context, str]]" = asyncio.Queue()
-        self._worker: Optional[asyncio.Task] = None
+        self.q: "asyncio.Queue[Tuple[commands.Context, str]]" = asyncio.Queue()
+        self.worker: Optional[asyncio.Task] = None
 
-        self.config = Config.get_conf(self, identifier=0xA71BDDDC0)
+        self.config = Config.get_conf(self, 0xBADA55, force_registration=True)
         self.config.register_global(
             api_base="",
             api_key="",
-            model="mistral",
-            channel_id=0,
-            start_prompt="",
-            memories=[],  # list[str]
+            chat_model="mistral",
+            embed_model="mistral-embed",
+            memories={},          # {name: {"text": str, "vec": List[float]}}
         )
 
-    # ─────────────────── lifecycle ───────────────────
+    # ───────────────── lifecycle ─────────────────
     async def cog_load(self):
-        self._worker = asyncio.create_task(self._worker_loop())
-        log.info("OpenWebUIChat worker started.")
+        self.worker = asyncio.create_task(self._worker())
+        log.info("OpenWebUIMemoryBot ready.")
 
     async def cog_unload(self):
-        if self._worker:
-            self._worker.cancel()
+        if self.worker:
+            self.worker.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._worker
+                await self.worker
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        cid = await self.config.channel_id()
-        if not cid:
-            return
-        chan = self.bot.get_channel(cid)
-        sp = await self.config.start_prompt()
-        if chan and sp:
-            try:
-                reply = await self._api_request([{"role": "system", "content": sp}])
-                await self._send_split(chan, reply)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Start-prompt failed: %s", exc)
-
-    # ─────────────────── REST helper ───────────────────
-    async def _fetch_settings(self):
+    # ───────────────── backend helpers ───────────
+    async def _get_keys(self):
         return await asyncio.gather(
-            self.config.api_base(), self.config.api_key(), self.config.model()
+            self.config.api_base(), self.config.api_key(),
+            self.config.chat_model(), self.config.embed_model()
         )
 
-    async def _api_request(self, messages: list) -> str:
-        base, key, model = await self._fetch_settings()
+    async def _api_chat(self, messages: list) -> str:
+        base, key, chat_model, _ = await self._get_keys()
         if not base or not key:
-            raise RuntimeError("OpenWebUI URL / key not configured.")
+            raise RuntimeError("OpenWebUI URL / key not set.")
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(
-                f"{base.rstrip('/')}/chat/completions",
-                headers=headers,
-                json={"model": model, "messages": messages},
-            )
+            r = await c.post(f"{base.rstrip('/')}/chat/completions",
+                             headers=headers,
+                             json={"model": chat_model, "messages": messages})
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
 
-    # ─────────────────── memory relevance ───────────────────
-    async def _relevant_memories(self, prompt: str) -> List[str]:
-        """Return memories sharing ≥2 significant words with the prompt."""
-        p_words = set(SIGNIF.findall(prompt.lower()))
-        if not p_words:
-            return []
-        mems = await self.config.memories()
-        good = []
-        for m in mems:
-            if len(p_words & set(SIGNIF.findall(m.lower()))) >= 2:
-                good.append(m)
-        return good[:MAX_MEMORIES_IN_PROMPT]
+    async def _api_embed(self, text: str) -> List[float]:
+        base, key, _, embed_model = await self._get_keys()
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(f"{base.rstrip('/')}/embeddings",
+                             headers=headers,
+                             json={"model": embed_model, "input": text})
+            r.raise_for_status()
+            return r.json()["data"][0]["embedding"]
 
+    # ───────────────── memory utils ──────────────
     @staticmethod
-    def _clean_deepseek(txt: str) -> str:
-        return re.sub(r"<think>.*?</think>", "", txt, flags=re.I | re.S).strip()
+    def _cos(a: np.ndarray, b: np.ndarray) -> float:
+        return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-    # ─────────────────── discord helper ───────────────────
-    async def _send_split(self, dest, text: str):
-        parts = [text[i:i + MAX_DISCORD] for i in range(0, len(text), MAX_DISCORD)] or [""]
-        for p in parts:
-            await dest.send(p or "-")
+    async def _best_memories(self, prompt_vec: np.ndarray, mems: Dict[str, Dict]) -> List[str]:
+        scored = []
+        for name, data in mems.items():
+            vec = np.array(data["vec"])
+            sim = self._cos(prompt_vec, vec)
+            if sim >= SIM_THRESHOLD:
+                scored.append((sim, data["text"]))
+        scored.sort(reverse=True)
+        return [t for _, t in scored[:TOP_K]]
 
-    # ─────────────────── worker loop ───────────────────
-    async def _worker_loop(self):
+    async def _add_memory(self, name: str, text: str):
+        mems = await self.config.memories()
+        if name in mems:
+            raise ValueError("Memory with that name exists")
+        vec = await self._api_embed(text)
+        mems[name] = {"text": text, "vec": vec}
+        await self.config.memories.set(mems)
+
+    # ───────────────── worker loop ───────────────
+    async def _worker(self):
         while True:
-            ctx, question = await self._queue.get()
+            ctx, question = await self.q.get()
             try:
-                await self._answer_question(ctx, question)
-            except Exception:  # noqa: BLE001
-                log.exception("Processing failed.")
+                await self._handle(ctx, question)
+            except Exception:
+                log.exception("Error while processing prompt")
             finally:
-                self._queue.task_done()
+                self.q.task_done()
 
-    async def _answer_question(self, ctx: commands.Context, question: str):
+    async def _handle(self, ctx: commands.Context, question: str):
         await ctx.typing()
 
-        mems = await self._relevant_memories(question)
+        mems = await self.config.memories()
         if not mems:
-            await ctx.send(FALLBACK_MSG)
-            return
+            return await ctx.send(FALLBACK)
 
-        system_block = (
+        prompt_vec = np.array(await self._api_embed(question))
+        relevant = await self._best_memories(prompt_vec, mems)
+
+        if not relevant:
+            return await ctx.send(FALLBACK)
+
+        system = (
             "You are a strict knowledge assistant.\n"
-            "You may ONLY answer using the following facts. "
-            "If they are insufficient, reply with exactly NO_ANSWER.\n\n"
-            "Facts:\n" + "\n".join(f"- {m}" for m in mems)
+            "Answer ONLY from the facts below. "
+            "If the facts are insufficient, reply with exactly NO_ANSWER.\n\n"
+            "Facts:\n" + "\n".join(f"- {t}" for t in relevant)
         )
 
-        reply = await self._api_request([
-            {"role": "system", "content": system_block},
-            {"role": "user",   "content": question},
+        reply = await self._api_chat([
+            {"role": "system", "content": system},
+            {"role": "user", "content": question},
         ])
 
-        if (await self.config.model()).lower().startswith("deepseek"):
-            reply = self._clean_deepseek(reply)
-
         if reply.strip().upper() == "NO_ANSWER":
-            await ctx.send(FALLBACK_MSG)
+            await ctx.send(FALLBACK)
         else:
-            await self._send_split(ctx, reply)
+            for part in [reply[i:i + MAX_MSG] for i in range(0, len(reply), MAX_MSG)]:
+                await ctx.send(part)
 
-    # ─────────────────── public command ───────────────────
-    @commands.hybrid_command(name="llmchat", with_app_command=True)
+    # ───────────────── commands ──────────────────
+    @commands.hybrid_command()
     async def llmchat(self, ctx: commands.Context, *, message: str):
-        """Ask a question; bot answers only when memories are sufficient."""
+        """Ask the knowledge-bot a question."""
         if ctx.interaction:
             await ctx.interaction.response.defer()
-        await self._queue.put((ctx, message))
+        await self.q.put((ctx, message))
 
-    # ─────────────────── owner config ───────────────────
+    # —— setup & memory management —— #
     @commands.group()
     @commands.is_owner()
     async def setopenwebui(self, ctx):
-        """Configure Open-WebUI connection."""
+        """Configure backend connection."""
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
@@ -169,16 +165,16 @@ class OpenWebUIChat(commands.Cog):
         await ctx.send("✅ API key set.")
 
     @setopenwebui.command()
-    async def model(self, ctx, model: str):
-        await self.config.model.set(model)
-        await ctx.send(f"✅ Model set to: {model}")
+    async def chatmodel(self, ctx, model: str):
+        await self.config.chat_model.set(model)
+        await ctx.send(f"✅ Chat model set to {model}")
 
     @setopenwebui.command()
-    async def channel(self, ctx, channel: discord.TextChannel):
-        await self.config.channel_id.set(channel.id)
-        await ctx.send(f"✅ Start-prompt channel set: {channel.mention}")
+    async def embedmodel(self, ctx, model: str):
+        await self.config.embed_model.set(model)
+        await ctx.send(f"✅ Embed model set to {model}")
 
-    # ─────────────────── memory vault ───────────────────
+    # memory CRUD
     @commands.group()
     @commands.is_owner()
     async def memory(self, ctx):
@@ -187,26 +183,32 @@ class OpenWebUIChat(commands.Cog):
             await ctx.send_help()
 
     @memory.command()
-    async def add(self, ctx, *, text: str):
-        mems = await self.config.memories()
-        mems.append(text)
-        await self.config.memories.set(mems)
-        await ctx.send("✅ Memory added.")
+    async def add(self, ctx, name: str, *, text: str):
+        """Add a memory entry."""
+        try:
+            await self._add_memory(name, text)
+        except ValueError as e:
+            await ctx.send(str(e))
+        else:
+            await ctx.send("✅ Memory added.")
 
     @memory.command(name="list")
-    async def mem_list(self, ctx):
+    async def _list(self, ctx):
         mems = await self.config.memories()
         if not mems:
-            await ctx.send("*No memories stored.*")
-            return
-        await self._send_split(ctx, "\n".join(f"{i+1}. {m}" for i, m in enumerate(mems)))
+            return await ctx.send("*No memories stored.*")
+        out = "\n".join(f"- **{n}**: {d['text'][:80]}…" for n, d in mems.items())
+        await ctx.send(out)
 
     @memory.command(name="del")
-    async def mem_del(self, ctx, index: int):
+    async def _del(self, ctx, name: str):
         mems = await self.config.memories()
-        if 1 <= index <= len(mems):
-            removed = mems.pop(index - 1)
-            await self.config.memories.set(mems)
-            await ctx.send(f"❌ Removed: {removed}")
-        else:
-            await ctx.send("Index out of range.")
+        if name not in mems:
+            return await ctx.send("No such memory.")
+        del mems[name]
+        await self.config.memories.set(mems)
+        await ctx.send("❌ Memory removed.")
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(OpenWebUIMemoryBot(bot))
