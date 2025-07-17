@@ -101,14 +101,16 @@ class OpenWebUIChat(commands.Cog):
 
     # ╭─────────── history + memory helpers ──────────────────────╮
     async def _get_history(self, chan_id: int) -> list:
-        return await self.config.custom("HIST", chan_id).get_raw(default=[])
+        key = self.config.custom("HIST", chan_id).history
+        return await key.get_raw(default=[])
 
     async def _push_history(self, chan_id: int, role: str, content: str):
-        key = self.config.custom("HIST", chan_id)
+        key = self.config.custom("HIST", chan_id).history
         hist = await key.get_raw(default=[])
         hist.append({"role": role, "content": content})
         hist = hist[-await self.config.max_history():]
-        await key.set(hist)
+        await key.set_raw(hist)
+
 
     @staticmethod
     def _clean_deepseek(txt: str) -> str:
