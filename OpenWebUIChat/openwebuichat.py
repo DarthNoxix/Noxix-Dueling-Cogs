@@ -96,7 +96,7 @@ class OpenWebUIChat(commands.Cog):
         await ctx.send(reply)
 
     @commands.hybrid_command()
-    async def chat(self, ctx: commands.Context, *, message: str) -> None:
+    async def llmchat(self, ctx: commands.Context, *, message: str) -> None:
         """Chat with your local LLM via Open-WebUI."""
         await self._queue.put((ctx, message))
 
