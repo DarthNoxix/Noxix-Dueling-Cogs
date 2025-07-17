@@ -21,18 +21,21 @@ class OpenWebUIChat(commands.Cog):
         self._queue: "asyncio.Queue[Tuple[commands.Context, str]]" = asyncio.Queue()
         self._worker: Optional[asyncio.Task] = None
 
+        # ── Red Config schema ────────────────────────────────────
         self.config = Config.get_conf(self, identifier=0xA71BDDDC0)
         self.config.register_global(
             api_base="",
             api_key="",
             model="mistral",
-            channel_id=0,        # start-prompt channel (optional legacy)
+            channel_id=0,        # optional “startup prompt” channel
             start_prompt="",
 
             chat_channels=[],    # list[int] – auto-chat channels
-            max_history=10,      # messages remembered per channel
-            memories=[],         # global memory strings
+            max_history=10,
+            memories=[],
         )
+        # NEW: initialize custom group for per-channel history
+        self.config.init_custom("HIST", 1)
 
     # ╭─────────── lifecycle ─────────────────────────────────────╮
     async def cog_load(self):
@@ -47,7 +50,7 @@ class OpenWebUIChat(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Send the system prompt once (if configured)."""
+        """Send system prompt once (if configured)."""
         channel_id = await self.config.channel_id()
         if not channel_id:
             return
@@ -61,7 +64,7 @@ class OpenWebUIChat(commands.Cog):
         try:
             reply = await self._api_request([{"role": "system", "content": prompt}])
             await self._send_split(chan, reply)
-        except Exception as exc:              # noqa: BLE001
+        except Exception as exc:                         # noqa: BLE001
             log.warning("Failed to post start prompt: %s", exc)
 
     # ╭─────────── helpers: REST + model list ────────────────────╮
@@ -72,7 +75,7 @@ class OpenWebUIChat(commands.Cog):
             self.config.model(),
         )
 
-    async def _api_request(self, messages: list, /) -> str:
+    async def _api_request(self, messages: list):
         base, key, model = await self._fetch_settings()
         if not base or not key:
             raise RuntimeError("API URL / key not configured ($setopenwebui).")
@@ -132,7 +135,7 @@ class OpenWebUIChat(commands.Cog):
             ctx, prompt = await self._queue.get()
             try:
                 await self._handle_prompt(ctx, prompt)
-            except Exception:                                 # noqa: BLE001
+            except Exception:                                # noqa: BLE001
                 log.exception("Failed to process prompt.")
             finally:
                 self._queue.task_done()
@@ -140,11 +143,8 @@ class OpenWebUIChat(commands.Cog):
     async def _handle_prompt(self, ctx: commands.Context, prompt: str):
         await ctx.typing()
 
-        # history
         msgs = await self._get_history(ctx.channel.id)
         msgs.append({"role": "user", "content": prompt})
-
-        # memories
         msgs = await self._inject_memories(prompt, msgs)
 
         reply = await self._api_request(msgs)
