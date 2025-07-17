@@ -208,7 +208,3 @@ class OpenWebUIMemoryBot(commands.Cog):
         del mems[name]
         await self.config.memories.set(mems)
         await ctx.send("❌ Memory removed.")
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(OpenWebUIMemoryBot(bot))

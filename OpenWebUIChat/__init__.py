@@ -1,5 +1,5 @@
-from .openwebuichat import OpenWebUIChat
+from .openwebuichat import OpenWebUIMemoryBot
 
 
 async def setup(bot):
-    await bot.add_cog(OpenWebUIChat(bot))
+    await bot.add_cog(OpenWebUIMemoryBot(bot))
