@@ -74,11 +74,11 @@ class OpenWebUIChat(commands.Cog):
 
     # ────────────────── history / memory ──────────────
     async def _get_history(self, cid: int) -> list:
-        return await self.config.custom("HIST", cid).history.get(default=[])
+        return await self.config.custom("HIST", cid).history()
 
     async def _push_history(self, cid: int, role: str, content: str):
         key = self.config.custom("HIST", cid).history
-        hist = await key.get(default=[])
+        hist = await key()                        # ← call to read
         hist.append({"role": role, "content": content})
         hist = hist[-await self.config.max_history():]
         await key.set(hist)
