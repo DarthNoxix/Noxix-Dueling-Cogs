@@ -12,13 +12,14 @@ log = logging.getLogger("red.OpenWebUIChat")
 
 MAX_DISCORD = 1990
 FALLBACK_MSG = "I do not know that information, please ask a member of the team."
-MAX_MEMORIES_IN_PROMPT = 50  # safety cap
+MAX_MEMORIES_IN_PROMPT = 50        # cap to keep prompts sane
+SIGNIF = re.compile(r"\b[a-z0-9]{4,}\b")  # significant words (≥4 chars)
 
 
 class OpenWebUIChat(commands.Cog):
-    """Wiki-bot that only answers from its stored memories."""
+    """LLM wiki-bot that only answers from its stored memories."""
 
-    # ─────────── init / config ───────────
+    # ─────────────────── init / config ───────────────────
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._queue: "asyncio.Queue[Tuple[commands.Context, str]]" = asyncio.Queue()
@@ -34,7 +35,7 @@ class OpenWebUIChat(commands.Cog):
             memories=[],  # list[str]
         )
 
-    # ─────────── lifecycle ───────────
+    # ─────────────────── lifecycle ───────────────────
     async def cog_load(self):
         self._worker = asyncio.create_task(self._worker_loop())
         log.info("OpenWebUIChat worker started.")
@@ -59,7 +60,7 @@ class OpenWebUIChat(commands.Cog):
             except Exception as exc:  # noqa: BLE001
                 log.warning("Start-prompt failed: %s", exc)
 
-    # ─────────── Open-WebUI helper ───────────
+    # ─────────────────── REST helper ───────────────────
     async def _fetch_settings(self):
         return await asyncio.gather(
             self.config.api_base(), self.config.api_key(), self.config.model()
@@ -79,17 +80,30 @@ class OpenWebUIChat(commands.Cog):
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
 
-    # ─────────── small helpers ───────────
+    # ─────────────────── memory relevance ───────────────────
+    async def _relevant_memories(self, prompt: str) -> List[str]:
+        """Return memories sharing ≥2 significant words with the prompt."""
+        p_words = set(SIGNIF.findall(prompt.lower()))
+        if not p_words:
+            return []
+        mems = await self.config.memories()
+        good = []
+        for m in mems:
+            if len(p_words & set(SIGNIF.findall(m.lower()))) >= 2:
+                good.append(m)
+        return good[:MAX_MEMORIES_IN_PROMPT]
+
     @staticmethod
     def _clean_deepseek(txt: str) -> str:
         return re.sub(r"<think>.*?</think>", "", txt, flags=re.I | re.S).strip()
 
+    # ─────────────────── discord helper ───────────────────
     async def _send_split(self, dest, text: str):
         parts = [text[i:i + MAX_DISCORD] for i in range(0, len(text), MAX_DISCORD)] or [""]
         for p in parts:
             await dest.send(p or "-")
 
-    # ─────────── background worker ───────────
+    # ─────────────────── worker loop ───────────────────
     async def _worker_loop(self):
         while True:
             ctx, question = await self._queue.get()
@@ -103,23 +117,23 @@ class OpenWebUIChat(commands.Cog):
     async def _answer_question(self, ctx: commands.Context, question: str):
         await ctx.typing()
 
-        mems = (await self.config.memories())[:MAX_MEMORIES_IN_PROMPT]
-        system_prompt = (
-            "You are a strict knowledge bot. "
-            "You may ONLY answer using the facts provided below. "
-            "If the facts are insufficient, reply exactly with the single word NO_ANSWER.\n\n"
-            "Facts:\n"
-            + "\n".join(f"- {m}" for m in mems)
+        mems = await self._relevant_memories(question)
+        if not mems:
+            await ctx.send(FALLBACK_MSG)
+            return
+
+        system_block = (
+            "You are a strict knowledge assistant.\n"
+            "You may ONLY answer using the following facts. "
+            "If they are insufficient, reply with exactly NO_ANSWER.\n\n"
+            "Facts:\n" + "\n".join(f"- {m}" for m in mems)
         )
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question},
-        ]
+        reply = await self._api_request([
+            {"role": "system", "content": system_block},
+            {"role": "user",   "content": question},
+        ])
 
-        reply = await self._api_request(messages)
-
-        # Optionally strip DeepSeek thinking
         if (await self.config.model()).lower().startswith("deepseek"):
             reply = self._clean_deepseek(reply)
 
@@ -128,19 +142,19 @@ class OpenWebUIChat(commands.Cog):
         else:
             await self._send_split(ctx, reply)
 
-    # ─────────── public command ───────────
+    # ─────────────────── public command ───────────────────
     @commands.hybrid_command(name="llmchat", with_app_command=True)
     async def llmchat(self, ctx: commands.Context, *, message: str):
-        """Ask the bot a question; it answers only from stored memories."""
+        """Ask a question; bot answers only when memories are sufficient."""
         if ctx.interaction:
             await ctx.interaction.response.defer()
         await self._queue.put((ctx, message))
 
-    # ─────────── owner config ───────────
+    # ─────────────────── owner config ───────────────────
     @commands.group()
     @commands.is_owner()
     async def setopenwebui(self, ctx):
-        """Configure Open-WebUI."""
+        """Configure Open-WebUI connection."""
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
@@ -164,16 +178,16 @@ class OpenWebUIChat(commands.Cog):
         await self.config.channel_id.set(channel.id)
         await ctx.send(f"✅ Start-prompt channel set: {channel.mention}")
 
-    # ─────────── memory vault ───────────
+    # ─────────────────── memory vault ───────────────────
     @commands.group()
     @commands.is_owner()
     async def memory(self, ctx):
-        """Add, list, or delete facts used by the bot."""
+        """Manage stored facts."""
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
-    @memory.command(name="add")
-    async def mem_add(self, ctx, *, text: str):
+    @memory.command()
+    async def add(self, ctx, *, text: str):
         mems = await self.config.memories()
         mems.append(text)
         await self.config.memories.set(mems)
