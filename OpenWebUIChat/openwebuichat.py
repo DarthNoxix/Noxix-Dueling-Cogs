@@ -1,16 +1,22 @@
-# openwebuichat.py  – wiki-style edition (with Value.get()/set() fix)
-
-import asyncio, contextlib, logging, re
+import asyncio
+import contextlib
+import logging
+import re
 from typing import List, Optional, Tuple
-import discord, httpx
+
+import discord
+import httpx
 from redbot.core import Config, commands
 
 log = logging.getLogger("red.OpenWebUIChat")
+
 MAX_DISCORD = 1990
 FALLBACK_MSG = "I do not know that information, please ask a member of the team."
 
 
 class OpenWebUIChat(commands.Cog):
+    """LLM wiki-bot backed by Open-WebUI memories (no history)."""
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._queue: "asyncio.Queue[Tuple[commands.Context, str]]" = asyncio.Queue()
@@ -21,14 +27,12 @@ class OpenWebUIChat(commands.Cog):
             api_base="",
             api_key="",
             model="mistral",
-            channel_id=0,
+            channel_id=0,       # optional startup-prompt channel
             start_prompt="",
-            max_history=10,
-            memories=[],
+            memories=[],        # list[str]
         )
-        self.config.init_custom("HIST", 1)  # per-channel history list
 
-    # ────────────────── lifecycle ──────────────────
+    # ╭──────────────── lifecycle ─────────────────╮
     async def cog_load(self):
         self._worker = asyncio.create_task(self._worker_loop())
         log.info("OpenWebUIChat worker started.")
@@ -42,20 +46,18 @@ class OpenWebUIChat(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         cid = await self.config.channel_id()
-        if not cid:
-            return
-        chan = self.bot.get_channel(cid)
-        if not chan:
-            return
-        sp = await self.config.start_prompt()
-        if sp:
-            try:
-                rep = await self._api_request([{"role": "system", "content": sp}])
-                await self._send_split(chan, rep)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Failed system prompt: %s", e)
+        if cid:
+            chan = self.bot.get_channel(cid)
+            prompt = await self.config.start_prompt()
+            if chan and prompt:
+                try:
+                    reply = await self._api_request([{"role": "system",
+                                                      "content": prompt}])
+                    await self._send_split(chan, reply)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Failed start prompt: %s", exc)
 
-    # ────────────────── REST helpers ──────────────────
+    # ╭──────────────── REST helpers ───────────────╮
     async def _fetch_settings(self):
         return await asyncio.gather(
             self.config.api_base(), self.config.api_key(), self.config.model()
@@ -64,40 +66,31 @@ class OpenWebUIChat(commands.Cog):
     async def _api_request(self, messages: list) -> str:
         base, key, model = await self._fetch_settings()
         if not base or not key:
-            raise RuntimeError("OpenWebUI URL / key not set.")
-        hdr = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        payload = {"model": model, "messages": messages}
+            raise RuntimeError("OpenWebUI URL / key not configured.")
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(f"{base.rstrip('/')}/chat/completions", headers=hdr, json=payload)
+            r = await c.post(f"{base.rstrip('/')}/chat/completions",
+                             headers=headers,
+                             json={"model": model, "messages": messages})
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
 
-    # ────────────────── history / memory ──────────────
-    async def _get_history(self, cid: int) -> list:
-        return await self.config.custom("HIST", cid).history()
-
-    async def _push_history(self, cid: int, role: str, content: str):
-        key = self.config.custom("HIST", cid).history
-        hist = await key()                        # ← call to read
-        hist.append({"role": role, "content": content})
-        hist = hist[-await self.config.max_history():]
-        await key.set(hist)
-
-    @staticmethod
-    def _clean_deepseek(t: str) -> str:
-        return re.sub(r"<think>.*?</think>", "", t, flags=re.I | re.S).strip()
-
+    # ╭──────────────── memories ───────────────────╮
     async def _relevant_memories(self, prompt: str) -> List[str]:
         mems = await self.config.memories()
-        pl = prompt.lower()
-        return [m for m in mems if any(w in pl for w in m.lower().split())]
+        p = prompt.lower()
+        return [m for m in mems if any(w in p for w in m.lower().split())]
 
-    # ────────────────── utils ─────────────────────────
+    @staticmethod
+    def _clean_deepseek(txt: str) -> str:
+        return re.sub(r"<think>.*?</think>", "", txt, flags=re.I | re.S).strip()
+
+    # ╭──────────────── discord helpers ────────────╮
     async def _send_split(self, dest, text: str):
-        for part in [text[i:i + MAX_DISCORD] for i in range(0, len(text), MAX_DISCORD)] or [""]:
-            await dest.send(part or "-")
+        for chunk in [text[i:i + MAX_DISCORD] for i in range(0, len(text), MAX_DISCORD)] or [""]:
+            await dest.send(chunk or "-")
 
-    # ────────────────── worker loop ───────────────────
+    # ╭──────────────── worker loop ────────────────╮
     async def _worker_loop(self):
         while True:
             ctx, prompt = await self._queue.get()
@@ -116,45 +109,39 @@ class OpenWebUIChat(commands.Cog):
             await ctx.send(FALLBACK_MSG)
             return
 
-        sys = "Here are some facts you must use when relevant:\n" + \
-              "\n".join(f"- {m}" for m in mems)
-        hist = await self._get_history(ctx.channel.id)
-        msgs = [{"role": "system", "content": sys}] + hist + \
-               [{"role": "user", "content": prompt}]
+        system = "Here are some facts you must use when relevant:\n" + \
+                 "\n".join(f"- {m}" for m in mems)
 
-        reply = await self._api_request(msgs)
+        reply = await self._api_request([
+            {"role": "system", "content": system},
+            {"role": "user",   "content": prompt},
+        ])
+
         if (await self.config.model()).lower().startswith("deepseek"):
             reply = self._clean_deepseek(reply)
 
         await self._send_split(ctx, reply)
-        await self._push_history(ctx.channel.id, "user", prompt)
-        await self._push_history(ctx.channel.id, "assistant", reply)
 
-    # ────────────────── user commands ────────────────
+    # ╭──────────────── public command ─────────────╮
     @commands.hybrid_command(name="llmchat", with_app_command=True)
     async def llmchat(self, ctx: commands.Context, *, message: str):
-        """Ask the knowledge-bot something."""
+        """Query the knowledge-bot."""
         if ctx.interaction:
             await ctx.interaction.response.defer()
         await self._queue.put((ctx, message))
 
-    @commands.hybrid_command()
-    async def reset(self, ctx: commands.Context):
-        """Clear history for this channel."""
-        await self.config.custom("HIST", ctx.channel.id).history.set([])
-        await ctx.send("✅ Conversation history cleared.")
-
-    # ─── settings (owner) ───
+    # ╭──────────────── owner config ───────────────╮
     @commands.group()
     @commands.is_owner()
     async def setopenwebui(self, ctx):
+        """Configure Open-WebUI."""
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
     @setopenwebui.command()
     async def url(self, ctx, url: str):
         await self.config.api_base.set(url)
-        await ctx.send(f"✅ URL set to: {url}")
+        await ctx.send("✅ URL set.")
 
     @setopenwebui.command()
     async def key(self, ctx, key: str):
@@ -169,36 +156,41 @@ class OpenWebUIChat(commands.Cog):
     @setopenwebui.command()
     async def channel(self, ctx, channel: discord.TextChannel):
         await self.config.channel_id.set(channel.id)
-        await ctx.send(f"✅ Start-prompt channel set to: {channel.mention}")
+        await ctx.send(f"✅ Start-prompt channel set: {channel.mention}")
 
-    # ─── memory vault ───
+    # ╭──────────────── memory vault ───────────────╮
     @commands.group()
     @commands.is_owner()
     async def memory(self, ctx):
+        """Add / list / delete stored facts."""
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
-    @memory.command(name="add")
-    async def mem_add(self, ctx, *, text: str):
+    @memory.command()
+    async def add(self, ctx, *, text: str):
         mems = await self.config.memories()
         mems.append(text)
         await self.config.memories.set(mems)
         await ctx.send("✅ Memory added.")
 
-    @memory.command(name="list")
-    async def mem_list(self, ctx):
+    @memory.command()
+    async def list(self, ctx):
         mems = await self.config.memories()
         if not mems:
             await ctx.send("*No memories stored.*")
             return
         await self._send_split(ctx, "\n".join(f"{i+1}. {m}" for i, m in enumerate(mems)))
 
-    @memory.command(name="del")
-    async def mem_del(self, ctx, index: int):
+    @memory.command()
+    async def delete(self, ctx, index: int):
         mems = await self.config.memories()
         if 1 <= index <= len(mems):
-            rem = mems.pop(index - 1)
+            removed = mems.pop(index - 1)
             await self.config.memories.set(mems)
-            await ctx.send(f"❌ Removed: {rem}")
+            await ctx.send(f"❌ Removed: {removed}")
         else:
             await ctx.send("Index out of range.")
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(OpenWebUIChat(bot))
