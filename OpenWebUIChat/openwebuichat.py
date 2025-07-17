@@ -122,7 +122,6 @@ class OpenWebUIChat(commands.Cog):
 
     # ╭─────────── public commands ──────────────────────────────╮
     @commands.hybrid_command(name="llmchat", with_app_command=True)
-    @commands.describe(message="What you want to ask the LLM")
     async def llmchat(self, ctx: commands.Context, *, message: str) -> None:
         """Chat with your local LLM via Open-WebUI."""
         # Defer if this came from a slash interaction
