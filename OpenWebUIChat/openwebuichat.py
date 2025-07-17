@@ -9,35 +9,36 @@ import httpx
 from redbot.core import Config, commands
 
 log = logging.getLogger("red.OpenWebUIChat")
-
 MAX_DISCORD = 1990
+FALLBACK_MSG = "I do not know that information, please ask a member of the team."
 
 
 class OpenWebUIChat(commands.Cog):
-    """Chat with a local LLM exposed by Open-WebUI."""
+    """Chat with a local LLM via Open-WebUI, using stored memories."""
 
+    # ────────────────────────────────────────────
+    # Init & config
+    # ────────────────────────────────────────────
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._queue: "asyncio.Queue[Tuple[commands.Context, str]]" = asyncio.Queue()
         self._worker: Optional[asyncio.Task] = None
 
-        # ── Red Config schema ────────────────────────────────────
         self.config = Config.get_conf(self, identifier=0xA71BDDDC0)
         self.config.register_global(
             api_base="",
             api_key="",
             model="mistral",
-            channel_id=0,        # optional “startup prompt” channel
+            channel_id=0,       # optional system-prompt channel
             start_prompt="",
-
-            chat_channels=[],    # list[int] – auto-chat channels
             max_history=10,
-            memories=[],
+            memories=[],        # list[str]
         )
-        # NEW: initialize custom group for per-channel history
-        self.config.init_custom("HIST", 1)
+        self.config.init_custom("HIST", 1)  # per-channel history (list)
 
-    # ╭─────────── lifecycle ─────────────────────────────────────╮
+    # ────────────────────────────────────────────
+    # Lifecycle
+    # ────────────────────────────────────────────
     async def cog_load(self):
         self._worker = asyncio.create_task(self._worker_loop())
         log.info("OpenWebUIChat worker started.")
@@ -50,24 +51,24 @@ class OpenWebUIChat(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Send system prompt once (if configured)."""
-        channel_id = await self.config.channel_id()
-        if not channel_id:
+        chan_id = await self.config.channel_id()
+        if not chan_id:
             return
-        chan = self.bot.get_channel(channel_id)
+        chan = self.bot.get_channel(chan_id)
         if not chan:
             return
-
         prompt = await self.config.start_prompt()
         if not prompt:
             return
         try:
             reply = await self._api_request([{"role": "system", "content": prompt}])
             await self._send_split(chan, reply)
-        except Exception as exc:                         # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             log.warning("Failed to post start prompt: %s", exc)
 
-    # ╭─────────── helpers: REST + model list ────────────────────╮
+    # ────────────────────────────────────────────
+    # Open-WebUI REST helpers
+    # ────────────────────────────────────────────
     async def _fetch_settings(self):
         return await asyncio.gather(
             self.config.api_base(),
@@ -75,7 +76,7 @@ class OpenWebUIChat(commands.Cog):
             self.config.model(),
         )
 
-    async def _api_request(self, messages: list):
+    async def _api_request(self, messages: list) -> str:
         base, key, model = await self._fetch_settings()
         if not base or not key:
             raise RuntimeError("API URL / key not configured ($setopenwebui).")
@@ -89,55 +90,45 @@ class OpenWebUIChat(commands.Cog):
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
 
-    async def _fetch_models(self) -> List[str]:
-        base, key, _ = await self._fetch_settings()
-        if not base or not key:
-            return []
-        headers = {"Authorization": f"Bearer {key}"}
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(f"{base.rstrip('/')}/models", headers=headers)
-            r.raise_for_status()
-            return [m["id"] for m in r.json().get("data", [])]
+    # ────────────────────────────────────────────
+    # History & memories
+    # ────────────────────────────────────────────
+    async def _get_history(self, cid: int) -> list:
+        return await self.config.custom("HIST", cid).history.get_raw(default=[])
 
-    # ╭─────────── history + memory helpers ──────────────────────╮
-    async def _get_history(self, chan_id: int) -> list:
-        key = self.config.custom("HIST", chan_id).history
-        return await key.get_raw(default=[])
-
-    async def _push_history(self, chan_id: int, role: str, content: str):
-        key = self.config.custom("HIST", chan_id).history
+    async def _push_history(self, cid: int, role: str, content: str):
+        key = self.config.custom("HIST", cid).history
         hist = await key.get_raw(default=[])
         hist.append({"role": role, "content": content})
         hist = hist[-await self.config.max_history():]
         await key.set_raw(hist)
 
-
     @staticmethod
     def _clean_deepseek(txt: str) -> str:
-        return re.sub(r"<think>.*?</think>", "", txt, flags=re.DOTALL | re.I).strip()
+        return re.sub(r"<think>.*?</think>", "", txt, flags=re.I | re.S).strip()
 
-    async def _inject_memories(self, prompt: str, msgs: list) -> list:
+    async def _relevant_memories(self, prompt: str) -> List[str]:
         mems = await self.config.memories()
-        relevant = [m for m in mems if any(w.lower() in prompt.lower() for w in m.split())]
-        if relevant:
-            mem_block = "Here are some facts you should use if relevant:\n" + \
-                        "\n".join(f"- {m}" for m in relevant)
-            msgs.insert(0, {"role": "system", "content": mem_block})
-        return msgs
+        prompt_lower = prompt.lower()
+        return [m for m in mems if any(word in prompt_lower for word in m.lower().split())]
 
-    # ╭─────────── Discord splitting ─────────────────────────────╮
-    async def _send_split(self, dest, text: str):   # noqa: ANN001
-        chunks = [text[i:i + MAX_DISCORD] for i in range(0, len(text), MAX_DISCORD)] or [""]
-        for c in chunks:
-            await dest.send(c or "-")
+    # ────────────────────────────────────────────
+    # Discord helpers
+    # ────────────────────────────────────────────
+    async def _send_split(self, dest, text: str):
+        parts = [text[i:i + MAX_DISCORD] for i in range(0, len(text), MAX_DISCORD)] or [""]
+        for p in parts:
+            await dest.send(p or "-")
 
-    # ╭─────────── background worker loop ────────────────────────╮
+    # ────────────────────────────────────────────
+    # Background worker – processes /llmchat queue
+    # ────────────────────────────────────────────
     async def _worker_loop(self):
         while True:
             ctx, prompt = await self._queue.get()
             try:
                 await self._handle_prompt(ctx, prompt)
-            except Exception:                                # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 log.exception("Failed to process prompt.")
             finally:
                 self._queue.task_done()
@@ -145,47 +136,46 @@ class OpenWebUIChat(commands.Cog):
     async def _handle_prompt(self, ctx: commands.Context, prompt: str):
         await ctx.typing()
 
-        msgs = await self._get_history(ctx.channel.id)
-        msgs.append({"role": "user", "content": prompt})
-        msgs = await self._inject_memories(prompt, msgs)
+        memories = await self._relevant_memories(prompt)
+        if not memories:
+            await ctx.send(FALLBACK_MSG)
+            return
+
+        system_block = "Here are some facts you must use when they are relevant:\n" + \
+                       "\n".join(f"- {m}" for m in memories)
+
+        history = await self._get_history(ctx.channel.id)
+        msgs = [{"role": "system", "content": system_block}] + history + \
+               [{"role": "user", "content": prompt}]
 
         reply = await self._api_request(msgs)
 
-        model = await self.config.model()
-        if model.lower().startswith("deepseek"):
+        if (await self.config.model()).lower().startswith("deepseek"):
             reply = self._clean_deepseek(reply)
 
         await self._send_split(ctx, reply)
         await self._push_history(ctx.channel.id, "user", prompt)
         await self._push_history(ctx.channel.id, "assistant", reply)
 
-    # ╭─────────── event: continuous-chat channels ───────────────╮
-    @commands.Cog.listener("on_message")
-    async def _auto_chat(self, msg: discord.Message):
-        if msg.author.bot:
-            return
-        chans = await self.config.chat_channels()
-        if msg.channel.id not in chans:
-            return
-        ctx = await self.bot.get_context(msg)
-        if ctx.valid:
-            await self._queue.put((ctx, msg.content))
-
-    # ╭─────────── public chat + reset cmds ──────────────────────╮
+    # ────────────────────────────────────────────
+    # Public commands
+    # ────────────────────────────────────────────
     @commands.hybrid_command(name="llmchat", with_app_command=True)
     async def llmchat(self, ctx: commands.Context, *, message: str):
-        """Send a prompt to the LLM."""
+        """Ask the knowledge-bot a question."""
         if ctx.interaction:
             await ctx.interaction.response.defer()
         await self._queue.put((ctx, message))
 
     @commands.hybrid_command()
     async def reset(self, ctx: commands.Context):
-        """Clear stored history for this channel."""
-        await self.config.custom("HIST", ctx.channel.id).clear()
+        """Clear history for this channel."""
+        await self.config.custom("HIST", ctx.channel.id).history.clear()
         await ctx.send("✅ Conversation history cleared for this channel.")
 
-    # ╭─────────── owner-only config commands ────────────────────╮
+    # ────────────────────────────────────────────
+    # Owner-only config commands
+    # ────────────────────────────────────────────
     @commands.group()
     @commands.is_owner()
     async def setopenwebui(self, ctx: commands.Context):
@@ -213,28 +203,13 @@ class OpenWebUIChat(commands.Cog):
         await self.config.channel_id.set(channel.id)
         await ctx.send(f"✅ Start-prompt channel set to: {channel.mention}")
 
-    # continuous-chat channels
-    @setopenwebui.command(name="addchat")
-    async def add_chat(self, ctx, channel: discord.TextChannel):
-        chans = await self.config.chat_channels()
-        if channel.id not in chans:
-            chans.append(channel.id)
-            await self.config.chat_channels.set(chans)
-        await ctx.send(f"✅ {channel.mention} added to auto-chat channels.")
-
-    @setopenwebui.command(name="rmchat")
-    async def rm_chat(self, ctx, channel: discord.TextChannel):
-        chans = await self.config.chat_channels()
-        if channel.id in chans:
-            chans.remove(channel.id)
-            await self.config.chat_channels.set(chans)
-        await ctx.send(f"❌ {channel.mention} removed from auto-chat channels.")
-
-    # ╭─────────── memory vault commands ─────────────────────────╮
+    # ────────────────────────────────────────────
+    # Memory vault
+    # ────────────────────────────────────────────
     @commands.group()
     @commands.is_owner()
     async def memory(self, ctx):
-        """Manage the bot’s memory vault."""
+        """Manage stored facts."""
         if ctx.invoked_subcommand is None:
             await ctx.send_help()
 
@@ -251,8 +226,8 @@ class OpenWebUIChat(commands.Cog):
         if not mems:
             await ctx.send("*No memories stored.*")
             return
-        listing = "\n".join(f"{i+1}. {m}" for i, m in enumerate(mems))
-        await self._send_split(ctx, listing)
+        out = "\n".join(f"{i+1}. {m}" for i, m in enumerate(mems))
+        await self._send_split(ctx, out)
 
     @memory.command(name="del")
     async def mem_del(self, ctx, index: int):
@@ -263,3 +238,7 @@ class OpenWebUIChat(commands.Cog):
             await ctx.send(f"❌ Removed: {removed}")
         else:
             await ctx.send("Index out of range.")
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(OpenWebUIChat(bot))
