@@ -4,6 +4,8 @@ from typing import Literal, Optional
 
 from redbot.core import commands
 import discord
+import asyncio
+import time
 
 
 def _norm(s: str) -> str:
@@ -51,6 +53,32 @@ class AlicentModeration(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self._recent_handled: dict[int, float] = {}
+
+    async def _suppress_assistant_reply(self, channel: discord.TextChannel):
+        """Wait briefly for the Assistant's RP reply and delete it if it appears."""
+        try:
+            def check(m: discord.Message) -> bool:
+                if m.channel.id != channel.id:
+                    return False
+                if not m.author.bot:
+                    return False
+                txt = (m.content or "").lower()
+                return any(
+                    key in txt for key in (
+                        "i am not equipped with the authority",
+                        "i am unable to carry out this action",
+                        "i do not possess the authority",
+                        "recommend consulting",
+                    )
+                )
+            m = await self.bot.wait_for("message", check=check, timeout=3.0)
+            try:
+                await m.delete()
+            except discord.HTTPException:
+                pass
+        except asyncio.TimeoutError:
+            return
 
     # ── Natural language router (mention-based) ──────────────────────────
     @commands.Cog.listener()
@@ -110,15 +138,14 @@ class AlicentModeration(commands.Cog):
                 author=message.author,
             )
 
-            # Try to quietly acknowledge and remove the command to prevent duplicate RP replies
+            # Acknowledge and try to suppress the Assistant's RP reply instead of deleting the user's message
             try:
                 try:
                     await message.add_reaction("✅")
                 except discord.HTTPException:
                     pass
-                if guild.me.guild_permissions.manage_messages:
-                    await message.delete()
-            except discord.HTTPException:
+                asyncio.create_task(self._suppress_assistant_reply(message.channel))
+            except Exception:
                 pass
 
             # Send a concise reply with the outcome
@@ -133,8 +160,8 @@ class AlicentModeration(commands.Cog):
         # Only proceed if text includes keywords indicating role ops
         role_add_cues = ("give", "add", "+=")
         role_remove_cues = ("remove", "take", "-=")
-        is_add = any(cue in low for cue in role_add_cues) and "role" in low or any(r"<@&" in text for _ in [0])
-        is_remove = any(cue in low for cue in role_remove_cues) and "role" in low or ("without" in low and "role" in low)
+        is_add = (any(cue in low for cue in role_add_cues) and ("role" in low)) or ("<@&" in text)
+        is_remove = (any(cue in low for cue in role_remove_cues) and ("role" in low)) or (("without" in low) and ("role" in low))
 
         if is_add or is_remove:
             # Find target member: first mentioned member that isn't the bot
@@ -201,15 +228,14 @@ class AlicentModeration(commands.Cog):
                 author=message.author,
             )
 
-            # Acknowledge and delete the trigger if possible
+            # Acknowledge and try to suppress the Assistant's RP reply instead of deleting the user's message
             try:
                 try:
                     await message.add_reaction("✅")
                 except discord.HTTPException:
                     pass
-                if guild.me.guild_permissions.manage_messages:
-                    await message.delete()
-            except discord.HTTPException:
+                asyncio.create_task(self._suppress_assistant_reply(message.channel))
+            except Exception:
                 pass
 
             # Send outcome
