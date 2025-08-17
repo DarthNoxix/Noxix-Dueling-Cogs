@@ -55,30 +55,42 @@ class AlicentModeration(commands.Cog):
         self.bot = bot
         self._recent_handled: dict[int, float] = {}
 
-    async def _suppress_assistant_reply(self, channel: discord.TextChannel):
-        """Wait briefly for the Assistant's RP reply and delete it if it appears."""
-        try:
-            def check(m: discord.Message) -> bool:
-                if m.channel.id != channel.id:
-                    return False
-                if not m.author.bot:
-                    return False
-                txt = (m.content or "").lower()
-                return any(
-                    key in txt for key in (
-                        "i am not equipped with the authority",
-                        "i am unable to carry out this action",
-                        "i do not possess the authority",
-                        "recommend consulting",
-                    )
-                )
-            m = await self.bot.wait_for("message", check=check, timeout=3.0)
+    async def _suppress_followups(self, channel: discord.TextChannel, allow_ids: set[int] | None = None, duration: float = 15.0):
+        """For a short window, delete any bot messages in this channel that are not in allow_ids.
+        This catches RP refusals and error log messages that appear after our moderation action.
+        """
+        allow_ids = allow_ids or set()
+        end = asyncio.get_event_loop().time() + max(0.0, duration)
+        phrases = (
+            "i am not equipped with the authority",
+            "i am unable to carry out this action",
+            "i do not possess the authority",
+            "recommend consulting",
+            "invalid value for 'content': expected a string, got null",
+            "bad request error",
+        )
+        while True:
+            timeout = end - asyncio.get_event_loop().time()
+            if timeout <= 0:
+                break
             try:
-                await m.delete()
-            except discord.HTTPException:
-                pass
-        except asyncio.TimeoutError:
-            return
+                def check(m: discord.Message) -> bool:
+                    if m.channel.id != channel.id:
+                        return False
+                    if not m.author.bot:
+                        return False
+                    if m.id in allow_ids:
+                        return False
+                    # If we can, avoid nuking other integrations by preferring known phrases
+                    txt = (m.content or "").lower()
+                    return True if not txt else any(p in txt for p in phrases)
+                m = await self.bot.wait_for("message", check=check, timeout=timeout)
+                try:
+                    await m.delete()
+                except discord.HTTPException:
+                    pass
+            except asyncio.TimeoutError:
+                break
 
     # ── Natural language router (mention-based) ──────────────────────────
     @commands.Cog.listener()
@@ -144,14 +156,21 @@ class AlicentModeration(commands.Cog):
                     await message.add_reaction("✅")
                 except discord.HTTPException:
                     pass
-                asyncio.create_task(self._suppress_assistant_reply(message.channel))
             except Exception:
                 pass
 
             # Send a concise reply with the outcome
+            out_msg = None
             try:
-                await message.channel.send(result.get("message", "Done."))
+                out_msg = await message.channel.send(result.get("message", "Done."))
             except discord.HTTPException:
+                pass
+
+            # Start suppression window (protect our own message if we have it)
+            try:
+                allow = {out_msg.id} if out_msg else set()
+                asyncio.create_task(self._suppress_followups(message.channel, allow_ids=allow, duration=20.0))
+            except Exception:
                 pass
 
             return
@@ -234,14 +253,21 @@ class AlicentModeration(commands.Cog):
                     await message.add_reaction("✅")
                 except discord.HTTPException:
                     pass
-                asyncio.create_task(self._suppress_assistant_reply(message.channel))
             except Exception:
                 pass
 
             # Send outcome
+            out_msg = None
             try:
-                await message.channel.send(result.get("message", "Done."))
+                out_msg = await message.channel.send(result.get("message", "Done."))
             except discord.HTTPException:
+                pass
+
+            # Start suppression window
+            try:
+                allow = {out_msg.id} if out_msg else set()
+                asyncio.create_task(self._suppress_followups(message.channel, allow_ids=allow, duration=20.0))
+            except Exception:
                 pass
 
             return
