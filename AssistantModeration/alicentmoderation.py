@@ -10,6 +10,42 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
 
 
+async def _resolve_member(guild: discord.Guild, user_id: Optional[int] = None, user: Optional[str] = None) -> Optional[discord.Member]:
+    # Prefer explicit ID if present
+    if user_id is not None:
+        m = guild.get_member(int(user_id))
+        if m is None:
+            try:
+                return await guild.fetch_member(int(user_id))
+            except discord.HTTPException:
+                return None
+        return m
+    # Try to extract an ID from a mention or raw numbers inside `user`
+    if user:
+        m_id = None
+        id_match = re.search(r"(\d{17,20})", user)
+        if id_match:
+            try:
+                m_id = int(id_match.group(1))
+            except ValueError:
+                m_id = None
+        if m_id:
+            m = guild.get_member(m_id)
+            if m is None:
+                try:
+                    return await guild.fetch_member(m_id)
+                except discord.HTTPException:
+                    pass
+            else:
+                return m
+        # Fall back to name/display_name exact (case-insensitive)
+        uname = user.strip().lower()
+        for m in guild.members:
+            if m.name.lower() == uname or (m.nick and m.nick.lower() == uname) or m.display_name.lower() == uname:
+                return m
+    return None
+
+
 class AlicentModeration(commands.Cog):
     """Assistant-exposed moderation tools (roles & kicks) with strict permission checks."""
 
@@ -74,7 +110,109 @@ class AlicentModeration(commands.Cog):
                 author=message.author,
             )
 
+            # Try to quietly acknowledge and remove the command to prevent duplicate RP replies
+            try:
+                try:
+                    await message.add_reaction("✅")
+                except discord.HTTPException:
+                    pass
+                if guild.me.guild_permissions.manage_messages:
+                    await message.delete()
+            except discord.HTTPException:
+                pass
+
             # Send a concise reply with the outcome
+            try:
+                await message.channel.send(result.get("message", "Done."))
+            except discord.HTTPException:
+                pass
+
+            return
+
+        # Handle roles: patterns like "give @User @Role", "add role X to @User", "remove/take @Role from @User"
+        # Only proceed if text includes keywords indicating role ops
+        role_add_cues = ("give", "add", "+=")
+        role_remove_cues = ("remove", "take", "-=")
+        is_add = any(cue in low for cue in role_add_cues) and "role" in low or any(r"<@&" in text for _ in [0])
+        is_remove = any(cue in low for cue in role_remove_cues) and "role" in low or ("without" in low and "role" in low)
+
+        if is_add or is_remove:
+            # Find target member: first mentioned member that isn't the bot
+            target_member: Optional[discord.Member] = None
+            for m in message.mentions:
+                if m.id != me.id and isinstance(m, discord.Member):
+                    target_member = m
+                    break
+            if target_member is None:
+                # Try to resolve "to <name>" / "for <name>"
+                name_match = re.search(r"\b(?:to|for)\s+([\w .'`-]{2,32})\b", text, flags=re.IGNORECASE)
+                if name_match:
+                    cand = name_match.group(1).strip()
+                    for m in guild.members:
+                        if m.display_name.lower() == cand.lower() or m.name.lower() == cand.lower() or (m.nick and m.nick.lower() == cand.lower()):
+                            target_member = m
+                            break
+            if target_member is None:
+                return
+
+            # Find role: prefer role mentions
+            target_role: Optional[discord.Role] = None
+            if getattr(message, "role_mentions", None):
+                if message.role_mentions:
+                    target_role = message.role_mentions[0]
+            if target_role is None:
+                # Try to parse after "role" keyword
+                # e.g., "give @User the Friend of The Crown role" or "add role Friend of The Crown to @User"
+                role_name = None
+                # Pattern: "the <name> role" or "role <name>"
+                m1 = re.search(r"\bthe\s+(.+?)\s+role\b", text, flags=re.IGNORECASE)
+                m2 = re.search(r"\brole\s+(.+?)\b(?:to|for|on|please|$)", text, flags=re.IGNORECASE)
+                if m1:
+                    role_name = m1.group(1).strip()
+                elif m2:
+                    role_name = m2.group(1).strip()
+                if role_name:
+                    # Trim trailing punctuation
+                    role_name = role_name.strip(" .,:;!?")
+                    # Resolve by exact (case-insensitive)
+                    rnorm = _norm(role_name)
+                    for r in guild.roles:
+                        if _norm(r.name) == rnorm:
+                            target_role = r
+                            break
+            if target_role is None:
+                # Fallback: explicit role ID in text
+                rid = re.search(r"<@&(?P<id>\d{17,20})>", text)
+                if rid:
+                    rid_int = int(rid.group("id"))
+                    target_role = guild.get_role(rid_int)
+            if target_role is None:
+                # Not enough information
+                return
+
+            action = "add" if is_add and not is_remove else "remove"
+
+            # Call the existing function with full checks
+            result = await self.alicent_manage_role(
+                action=action,
+                user_id=target_member.id,
+                role=str(target_role.id),  # pass ID; function resolves name/id
+                guild=guild,
+                author=message.author,
+            )
+
+            # Acknowledge and delete the trigger if possible
+            try:
+                try:
+                    await message.add_reaction("✅")
+                except discord.HTTPException:
+                    pass
+                if guild.me.guild_permissions.manage_messages:
+                    await message.delete()
+            except discord.HTTPException:
+                pass
+
+            # Send outcome
             try:
                 await message.channel.send(result.get("message", "Done."))
             except discord.HTTPException:
@@ -109,6 +247,10 @@ class AlicentModeration(commands.Cog):
                             "type": "integer",
                             "description": "Target user's Discord ID.",
                         },
+                        "user": {
+                            "type": "string",
+                            "description": "Target user as mention, raw ID, or name (fallback if user_id isn’t provided).",
+                        },
                         "role": {
                             "type": "string",
                             "description": "Role name or numeric role ID to add/remove.",
@@ -139,6 +281,10 @@ class AlicentModeration(commands.Cog):
                             "type": "integer",
                             "description": "Target user's Discord ID.",
                         },
+                        "user": {
+                            "type": "string",
+                            "description": "Target user as mention, raw ID, or name (fallback if user_id isn’t provided).",
+                        },
                         "reason": {
                             "type": "string",
                             "description": "Optional audit-log reason.",
@@ -153,10 +299,11 @@ class AlicentModeration(commands.Cog):
     async def alicent_manage_role(
         self,
         action: Literal["add", "remove"],
-        user_id: int,
-        role: str,
+        user_id: Optional[int] = None,
+        role: str = "",
         reason: Optional[str] = None,
         *,
+        user: Optional[str] = None,
         guild: Optional[discord.Guild] = None,
         author: Optional[discord.Member] = None,
         **__,
@@ -176,14 +323,9 @@ class AlicentModeration(commands.Cog):
             return {"ok": False, "message": "Requester context missing."}
 
         # Resolve target
-        member = guild.get_member(int(user_id))
+        member = await _resolve_member(guild, user_id=user_id, user=user)
         if member is None:
-            try:
-                member = await guild.fetch_member(int(user_id))
-            except discord.NotFound:
-                return {"ok": False, "message": "Target user is not in this server."}
-            except discord.HTTPException:
-                return {"ok": False, "message": "Failed to fetch target member."}
+            return {"ok": False, "message": "Target user not found (provide a mention, ID, or exact name)."}
 
         # Resolve role by ID or name (case/space-insensitive)
         target_role: Optional[discord.Role] = None
@@ -252,9 +394,10 @@ class AlicentModeration(commands.Cog):
 
     async def alicent_kick_member(
         self,
-        user_id: int,
+        user_id: Optional[int] = None,
         reason: Optional[str] = None,
         *,
+        user: Optional[str] = None,
         guild: Optional[discord.Guild] = None,
         author: Optional[discord.Member] = None,
         **__,
@@ -272,14 +415,9 @@ class AlicentModeration(commands.Cog):
             return {"ok": False, "message": "Requester context missing."}
 
         # Resolve target
-        member = guild.get_member(int(user_id))
+        member = await _resolve_member(guild, user_id=user_id, user=user)
         if member is None:
-            try:
-                member = await guild.fetch_member(int(user_id))
-            except discord.NotFound:
-                return {"ok": False, "message": "Target user is not in this server."}
-            except discord.HTTPException:
-                return {"ok": False, "message": "Failed to fetch target member."}
+            return {"ok": False, "message": "Target user not found (provide a mention, ID, or exact name)."}
 
         # Requester perms
         if not (author.guild_permissions.administrator or author.guild_permissions.kick_members):
