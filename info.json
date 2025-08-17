@@ -1,8 +1,8 @@
 {
-    "author": ["inthedark.org"],
-    "install_msg": "Thanks for install my repo! If you need help with any cogs consider joining my support server (<https://discord.gg/mXfYuMy92r>) or make an issue on my repo.",
-    "name": "Seina-Cogs",
-    "short": "Just some tools for red.",
-    "description": "Fun cogs developed by inthedark.org.",
-    "tags": ["fun"]
+    "author": ["Noxix"],
+    "install_msg": "This repository contains cogs made by Noxix. It will only work for Noxix.",
+    "name": "Noxix's Cogs",
+    "short": "Just some useful cogs by Noxix",
+    "description": "This repository contains cogs made by Noxix. It will only work for Noxix.",
+    "tags": ["useful"]
 }
