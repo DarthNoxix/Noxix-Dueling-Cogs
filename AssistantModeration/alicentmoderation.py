@@ -16,6 +16,72 @@ class AlicentModeration(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # ── Natural language router (mention-based) ──────────────────────────
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """
+        Lightweight NL handler so phrases like "@Alicent kick @User for <reason>" work.
+        This only triggers when the bot is mentioned and reuses our strict checks.
+        """
+        # Ignore DMs and bot/webhook messages
+        if not message.guild or message.author.bot:
+            return
+
+        guild: discord.Guild = message.guild
+        me: Optional[discord.Member] = guild.me
+        if me is None:
+            return
+
+        # Only act if the bot was mentioned
+        if not any(m.id == me.id for m in message.mentions):
+            return
+
+        # Normalize content
+        text = message.content
+        low = text.lower()
+
+        # Handle kicks: look for a command like "kick @user ..." when the bot is mentioned
+        if "kick" in low:
+            # Choose the first mentioned member that is not the bot itself
+            target: Optional[discord.Member] = None
+            for m in message.mentions:
+                if m.id != me.id and isinstance(m, discord.Member):
+                    target = m
+                    break
+
+            # Fallback: numeric ID in the text
+            if target is None:
+                id_match = re.search(r"\b(\d{17,20})\b", text)
+                if id_match:
+                    try:
+                        target = await guild.fetch_member(int(id_match.group(1)))
+                    except discord.HTTPException:
+                        target = None
+
+            if target is None:
+                # Not enough info to resolve a target—politely ignore to avoid noise
+                return
+
+            # Try to parse a reason after cue words
+            reason_match = re.search(r"\b(?:for|because|due to|reason[:\-]?)\s+(.*)$", text, flags=re.IGNORECASE)
+            reason = reason_match.group(1).strip() if reason_match else None
+
+            # Call the existing function with full safety checks
+            result = await self.alicent_kick_member(
+                user_id=target.id,
+                reason=reason,
+                guild=guild,
+                author=message.author,
+            )
+
+            # Send a concise reply with the outcome
+            try:
+                await message.channel.send(result.get("message", "Done."))
+            except discord.HTTPException:
+                pass
+
+            return
+
     # ── Assistant registration ───────────────────────────────────────────
     @commands.Cog.listener()
     async def on_assistant_cog_add(self, cog):
